@@ -18,19 +18,11 @@ export default function Player({ url, onClose }: PlayerProps) {
         controls: true,
         responsive: true,
         fluid: true,
-        sources: [
-          {
-            src: url,
-            type: "application/x-mpegURL",
-          },
-        ],
+        sources: [{ src: url, type: "application/x-mpegURL" }],
       });
     }
-
     return () => {
-      if (playerRef.current) {
-        playerRef.current.dispose();
-      }
+      if (playerRef.current) playerRef.current.dispose();
     };
   }, [url]);
 

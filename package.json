@@ -11,6 +11,7 @@
     "@iptv/playlist": "^1.2.1",
     "@iptv/xtream-api": "^1.4.1",
     "hls.js": "^1.6.13",
+    "lucide-react": "^0.547.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "video.js": "^8.23.4",
