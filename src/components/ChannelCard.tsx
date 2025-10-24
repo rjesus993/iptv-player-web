@@ -2,10 +2,17 @@ export default function ChannelCard({ channel, onClick }: { channel: any; onClic
   return (
     <div
       onClick={onClick}
-      className="bg-gray-800 rounded-lg p-3 flex flex-col items-center hover:bg-gray-700 cursor-pointer transition"
+      className="bg-gray-800 rounded-lg p-3 flex flex-col items-center hover:scale-105 hover:bg-gray-700 cursor-pointer transition"
     >
       {channel.logo ? (
-        <img src={channel.logo} alt={channel.name} className="w-full h-20 object-contain" />
+        <img
+          src={channel.logo}
+          alt={channel.name}
+          className="w-full h-20 object-contain"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).src = "/fallback.png";
+          }}
+        />
       ) : (
         <div className="w-full h-20 flex items-center justify-center text-gray-400 text-sm">
           Sem logo

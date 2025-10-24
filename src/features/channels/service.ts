@@ -1,12 +1,11 @@
-// Mantemos as chamadas via player_api.php para compatibilidade.
-// Certifique-se que host inclui protocolo (http://) e porta quando necessário.
 import { parseM3U } from "@iptv/playlist";
 
 export interface Channel {
   id: string;
   name: string;
   logo?: string;
-  group?: string;
+  category_id?: string;
+  category_name?: string;
   url: string;
 }
 
@@ -24,6 +23,7 @@ interface M3UConfig {
 
 export type ChannelSource = XtreamConfig | M3UConfig;
 
+/* 🔹 Carregar canais ao vivo */
 export async function loadChannels(source: ChannelSource): Promise<Channel[]> {
   if (source.type === "xtream") {
     const base = source.host.replace(/\/$/, "");
@@ -34,15 +34,14 @@ export async function loadChannels(source: ChannelSource): Promise<Channel[]> {
     const res = await fetch(url);
     if (!res.ok) throw new Error("Erro ao carregar canais");
     const data = await res.json();
-
-    // Alguns servidores retornam objeto; garantimos array
     const list = Array.isArray(data) ? data : data?.live_streams || [];
 
     return list.map((s: any) => ({
       id: String(s.stream_id),
       name: s.name,
       logo: s.stream_icon,
-      group: s.category_id || s.category_name,
+      category_id: s.category_id,
+      category_name: s.category_name,
       url: `${base}/live/${source.username}/${source.password}/${s.stream_id}.m3u8`,
     }));
   }
@@ -55,7 +54,8 @@ export async function loadChannels(source: ChannelSource): Promise<Channel[]> {
       id: String(idx),
       name: item.name,
       logo: item.tvg?.logo,
-      group: item.group?.title,
+      category_id: item.group?.title,
+      category_name: item.group?.title,
       url: item.url,
     }));
   }
@@ -63,6 +63,24 @@ export async function loadChannels(source: ChannelSource): Promise<Channel[]> {
   return [];
 }
 
+/* 🔹 Carregar categorias de canais */
+export async function loadChannelCategories(source: XtreamConfig) {
+  const base = source.host.replace(/\/$/, "");
+  const url = `${base}/player_api.php?username=${encodeURIComponent(
+    source.username
+  )}&password=${encodeURIComponent(source.password)}&action=get_live_categories`;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Erro ao carregar categorias");
+  const data = await res.json();
+
+  return data.map((c: any) => ({
+    id: c.category_id,
+    name: c.category_name,
+  }));
+}
+
+/* 🔹 Carregar filmes (VOD) */
 export async function loadVod(source: XtreamConfig) {
   const base = source.host.replace(/\/$/, "");
   const url = `${base}/player_api.php?username=${encodeURIComponent(
@@ -78,10 +96,13 @@ export async function loadVod(source: XtreamConfig) {
     id: String(v.stream_id),
     name: v.name,
     logo: v.stream_icon || v.cover,
+    category_id: v.category_id,
+    category_name: v.category_name,
     url: `${base}/movie/${source.username}/${source.password}/${v.stream_id}.m3u8`,
   }));
 }
 
+/* 🔹 Carregar séries */
 export async function loadSeries(source: XtreamConfig) {
   const base = source.host.replace(/\/$/, "");
   const url = `${base}/player_api.php?username=${encodeURIComponent(
@@ -97,6 +118,8 @@ export async function loadSeries(source: XtreamConfig) {
     id: String(s.series_id),
     name: s.name,
     logo: s.cover,
+    category_id: s.category_id,
+    category_name: s.category_name,
     plot: s.plot,
   }));
 }
