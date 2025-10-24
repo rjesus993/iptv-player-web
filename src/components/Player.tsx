@@ -21,7 +21,7 @@ export default function Player({ url, onClose }: PlayerProps) {
         sources: [
           {
             src: url,
-            type: "application/x-mpegURL", // HLS
+            type: "application/x-mpegURL",
           },
         ],
       });

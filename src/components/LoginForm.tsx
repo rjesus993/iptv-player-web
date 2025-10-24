@@ -19,9 +19,6 @@ export default function LoginForm() {
         return;
       }
 
-      const apiUrl = `${host.replace(/\/$/, "")}/player_api.php?username=${username}&password=${password}`;
-      console.log("Xtream API URL:", apiUrl);
-
       login({
         type: "xtream",
         host,
@@ -70,14 +67,14 @@ export default function LoginForm() {
           <>
             <input
               type="text"
-              placeholder="Host (http://exemplo.com:8080)"
+              placeholder="Host (http://cnxfast.site:80)"
               value={host}
               onChange={(e) => setHost(e.target.value)}
               className="w-full p-2 rounded bg-gray-700"
             />
             <input
               type="text"
-              placeholder="Usuário"
+              placeholder="Usuário (e-mail ou login)"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               className="w-full p-2 rounded bg-gray-700"

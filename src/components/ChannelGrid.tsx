@@ -11,7 +11,7 @@ export default function ChannelGrid() {
   const [currentUrl, setCurrentUrl] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!auth.type) return;
+    if (!auth || !auth.type) return;
 
     setLoading(true);
     setError(null);
@@ -30,10 +30,13 @@ export default function ChannelGrid() {
           };
 
     loadChannels(source)
-      .then(setChannels)
+      .then((chs) => {
+        setChannels(chs);
+        if (chs.length === 0) setError("Nenhum canal encontrado.");
+      })
       .catch((err) => {
         console.error(err);
-        setError("Erro ao carregar canais");
+        setError("Erro ao carregar canais. Verifique as credenciais ou o arquivo M3U.");
       })
       .finally(() => setLoading(false));
   }, [auth]);

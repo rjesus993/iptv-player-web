@@ -1,5 +1,5 @@
 import { Xtream } from "@iptv/xtream-api";
-import { parse } from "@iptv/playlist";
+import { parseM3U } from "@iptv/playlist";
 
 export interface Channel {
   id: string;
@@ -23,32 +23,29 @@ interface M3UConfig {
 
 export type ChannelSource = XtreamConfig | M3UConfig;
 
-/**
- * Função unificada para carregar canais
- */
 export async function loadChannels(source: ChannelSource): Promise<Channel[]> {
   if (source.type === "xtream") {
     const xtream = new Xtream({
-      url: source.host,
+      url: source.host.replace(/\/$/, ""),
       username: source.username,
       password: source.password,
-      preferredFormat: "m3u8",
     });
 
-    const streams = await xtream.getLiveStreams();
+    // Aqui usamos a ação "get_live_streams"
+    const streams = await xtream.request("get_live_streams");
 
-    return streams.map((s) => ({
+    return streams.map((s: any) => ({
       id: String(s.stream_id),
       name: s.name,
       logo: s.stream_icon,
       group: s.category_name,
-      url: s.url, // já vem pronto
+      url: `${source.host.replace(/\/$/, "")}/live/${source.username}/${source.password}/${s.stream_id}.m3u8`,
     }));
   }
 
   if (source.type === "m3u") {
     const text = await source.file.text();
-    const playlist = parse(text);
+    const playlist = parseM3U(text);
 
     return playlist.items.map((item, idx) => ({
       id: String(idx),
@@ -60,4 +57,40 @@ export async function loadChannels(source: ChannelSource): Promise<Channel[]> {
   }
 
   return [];
+}
+
+export async function loadVod(source: XtreamConfig) {
+  const xtream = new Xtream({
+    url: source.host.replace(/\/$/, ""),
+    username: source.username,
+    password: source.password,
+  });
+
+  // Ação correta: "get_vod_streams"
+  const vods = await xtream.request("get_vod_streams");
+
+  return vods.map((v: any) => ({
+    id: String(v.stream_id),
+    name: v.name,
+    logo: v.stream_icon,
+    url: `${source.host.replace(/\/$/, "")}/movie/${source.username}/${source.password}/${v.stream_id}.m3u8`,
+  }));
+}
+
+export async function loadSeries(source: XtreamConfig) {
+  const xtream = new Xtream({
+    url: source.host.replace(/\/$/, ""),
+    username: source.username,
+    password: source.password,
+  });
+
+  // Ação correta: "get_series"
+  const series = await xtream.request("get_series");
+
+  return series.map((s: any) => ({
+    id: String(s.series_id),
+    name: s.name,
+    logo: s.cover,
+    plot: s.plot,
+  }));
 }
