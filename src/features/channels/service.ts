@@ -1,75 +1,25 @@
-import { Xtream } from "@iptv/xtream-api";
-import { parseM3U } from "@iptv/playlist";
+export async function loadChannels(source: XtreamConfig) {
+  const url = `${source.host.replace(/\/$/, "")}/player_api.php?username=${source.username}&password=${source.password}&action=get_live_streams`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Erro ao carregar canais");
+  const data = await res.json();
 
-export interface Channel {
-  id: string;
-  name: string;
-  logo?: string;
-  group?: string;
-  url: string;
-}
-
-interface XtreamConfig {
-  type: "xtream";
-  host: string;
-  username: string;
-  password: string;
-}
-
-interface M3UConfig {
-  type: "m3u";
-  file: File;
-}
-
-export type ChannelSource = XtreamConfig | M3UConfig;
-
-export async function loadChannels(source: ChannelSource): Promise<Channel[]> {
-  if (source.type === "xtream") {
-    const xtream = new Xtream({
-      url: source.host.replace(/\/$/, ""),
-      username: source.username,
-      password: source.password,
-    });
-
-    // Aqui usamos a ação "get_live_streams"
-    const streams = await xtream.request("get_live_streams");
-
-    return streams.map((s: any) => ({
-      id: String(s.stream_id),
-      name: s.name,
-      logo: s.stream_icon,
-      group: s.category_name,
-      url: `${source.host.replace(/\/$/, "")}/live/${source.username}/${source.password}/${s.stream_id}.m3u8`,
-    }));
-  }
-
-  if (source.type === "m3u") {
-    const text = await source.file.text();
-    const playlist = parseM3U(text);
-
-    return playlist.items.map((item, idx) => ({
-      id: String(idx),
-      name: item.name,
-      logo: item.tvg?.logo,
-      group: item.group?.title,
-      url: item.url,
-    }));
-  }
-
-  return [];
+  return data.map((c: any) => ({
+    id: String(c.stream_id),
+    name: c.name,
+    logo: c.stream_icon,
+    group: c.category_id,
+    url: `${source.host.replace(/\/$/, "")}/live/${source.username}/${source.password}/${c.stream_id}.m3u8`,
+  }));
 }
 
 export async function loadVod(source: XtreamConfig) {
-  const xtream = new Xtream({
-    url: source.host.replace(/\/$/, ""),
-    username: source.username,
-    password: source.password,
-  });
+  const url = `${source.host.replace(/\/$/, "")}/player_api.php?username=${source.username}&password=${source.password}&action=get_vod_streams`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Erro ao carregar filmes");
+  const data = await res.json();
 
-  // Ação correta: "get_vod_streams"
-  const vods = await xtream.request("get_vod_streams");
-
-  return vods.map((v: any) => ({
+  return data.map((v: any) => ({
     id: String(v.stream_id),
     name: v.name,
     logo: v.stream_icon,
@@ -78,16 +28,12 @@ export async function loadVod(source: XtreamConfig) {
 }
 
 export async function loadSeries(source: XtreamConfig) {
-  const xtream = new Xtream({
-    url: source.host.replace(/\/$/, ""),
-    username: source.username,
-    password: source.password,
-  });
+  const url = `${source.host.replace(/\/$/, "")}/player_api.php?username=${source.username}&password=${source.password}&action=get_series`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Erro ao carregar séries");
+  const data = await res.json();
 
-  // Ação correta: "get_series"
-  const series = await xtream.request("get_series");
-
-  return series.map((s: any) => ({
+  return data.map((s: any) => ({
     id: String(s.series_id),
     name: s.name,
     logo: s.cover,
