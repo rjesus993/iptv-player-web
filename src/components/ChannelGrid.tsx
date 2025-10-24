@@ -11,7 +11,7 @@ export default function ChannelGrid() {
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [currentUrl, setCurrentUrl] = useState<string | null>(null);
+  const [currentChannel, setCurrentChannel] = useState<Channel | null>(null);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
 
@@ -93,13 +93,18 @@ export default function ChannelGrid() {
           <ChannelCard
             key={ch.id}
             channel={ch}
-            onClick={() => setCurrentUrl(ch.url)}
+            onClick={() => setCurrentChannel(ch)}
           />
         ))}
       </div>
 
-      {currentUrl && (
-        <Player url={currentUrl} onClose={() => setCurrentUrl(null)} />
+      {currentChannel && (
+        <Player
+          url={currentChannel.url}
+          channelName={currentChannel.name}
+          channelLogo={currentChannel.logo}
+          onClose={() => setCurrentChannel(null)}
+        />
       )}
     </div>
   );
