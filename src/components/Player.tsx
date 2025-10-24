@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
-import dashjs from "dashjs"; // Suporte a MPEG-DASH
+import dashjs from "dashjs";
 import ReactPlayer from "react-player";
 import {
   MdPlayArrow,
@@ -17,11 +17,13 @@ export default function TVPlayer({
   channelName,
   channelLogo,
   onClose,
+  onErrorPlayback, // callback para marcar OFFLINE no grid
 }: {
   url: string;
   channelName: string;
   channelLogo?: string;
   onClose: () => void;
+  onErrorPlayback?: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -30,74 +32,23 @@ export default function TVPlayer({
 
   const [isPlaying, setIsPlaying] = useState(true);
   const [isMuted, setIsMuted] = useState(false);
-  const [volumeUI, setVolumeUI] = useState(1); // controla apenas o slider
+  const [volumeUI, setVolumeUI] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [useReactPlayer, setUseReactPlayer] = useState(false);
   const [showUI, setShowUI] = useState(true);
   const [loading, setLoading] = useState(true);
   const [lastError, setLastError] = useState<string | null>(null);
 
-  // Reconexão (apenas para cenários de rede/timeouts)
-  const [retryCount, setRetryCount] = useState(0);
-  const maxRetries = 5;
-  const stallTimerRef = useRef<number | null>(null);
-
   function handleVolumeChange(val: number) {
     setVolumeUI(val);
     const v = videoRef.current;
     if (v && !useReactPlayer) {
       v.volume = val;
-      v.muted = val === 0;
+      v.muted = val === 0 || isMuted;
     }
   }
 
-  function clearStallTimer() {
-    if (stallTimerRef.current) {
-      window.clearTimeout(stallTimerRef.current);
-      stallTimerRef.current = null;
-    }
-  }
-
-  function startStallTimer() {
-    clearStallTimer();
-    stallTimerRef.current = window.setTimeout(() => {
-      scheduleReconnect("Timeout de dados: servidor IPTV não forneceu segmentos");
-    }, 15000);
-  }
-
-  function scheduleReconnect(reason: string) {
-    // Para streams VOD (mp4/webm/ogg), reconexão é menos útil; focamos em HLS/DASH/live
-    if (retryCount >= maxRetries) {
-      setLastError(`${reason} — Limite de tentativas atingido.`);
-      return;
-    }
-    const nextRetry = retryCount + 1;
-    const delay = Math.min(5000 * nextRetry, 30000);
-    setLastError(`${reason} — Tentando reconectar em ${delay / 1000}s...`);
-    setRetryCount(nextRetry);
-
-    window.setTimeout(() => {
-      const v = videoRef.current;
-      if (v) {
-        try {
-          v.load();
-          v.play().catch(() => {});
-        } catch {}
-      }
-      if (hlsRef.current) {
-        try {
-          hlsRef.current.startLoad();
-        } catch {}
-      }
-      if (dashRef.current) {
-        try {
-          // Reinicializa reprodução em DASH
-          dashRef.current.play();
-        } catch {}
-      }
-    }, delay);
-  }
-
+  // Inicialização do player (apenas quando a URL muda)
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -105,20 +56,14 @@ export default function TVPlayer({
     setLoading(true);
     setUseReactPlayer(false);
     setLastError(null);
-    setRetryCount(0);
-    clearStallTimer();
 
-    // Limpa instâncias anteriores
+    // limpar instâncias anteriores
     if (hlsRef.current) {
-      try {
-        hlsRef.current.destroy();
-      } catch {}
+      try { hlsRef.current.destroy(); } catch {}
       hlsRef.current = null;
     }
     if (dashRef.current) {
-      try {
-        dashRef.current.reset();
-      } catch {}
+      try { dashRef.current.reset(); } catch {}
       dashRef.current = null;
     }
 
@@ -126,142 +71,71 @@ export default function TVPlayer({
     const isDash = url.toLowerCase().endsWith(".mpd");
     const isNativeFile = /\.(mp4|webm|ogg)(\?.*)?$/i.test(url);
 
-    if (isHls && (Hls.isSupported() || /Safari/i.test(navigator.userAgent))) {
-      // HLS: usar hls.js quando suportado; no Safari/iOS o <video> suporta nativamente
-      if (Hls.isSupported()) {
-        const hls = new Hls({
-          enableWorker: true,
-          lowLatencyMode: false,
-          liveSyncDuration: 20,
-          liveMaxLatencyDuration: 60,
-          maxLiveSyncPlaybackRate: 1.0,
-          backBufferLength: 300,
-          maxBufferLength: 60,
-          maxBufferHole: 1,
-          startPosition: -20,
-        });
-        hlsRef.current = hls;
-        hls.loadSource(url);
-        hls.attachMedia(v);
+    if (isHls && Hls.isSupported()) {
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: false,
+      });
+      hlsRef.current = hls;
+      hls.loadSource(url);
+      hls.attachMedia(v);
 
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          v.muted = isMuted;
-          v.volume = volumeUI;
-          v.play().catch(() => setUseReactPlayer(true));
-        });
-        hls.on(Hls.Events.LEVEL_LOADED, () => setLoading(false));
-        hls.on(Hls.Events.ERROR, (_event, data) => {
-          if (data.fatal) {
-            switch (data.type) {
-              case Hls.ErrorTypes.NETWORK_ERROR:
-                scheduleReconnect("Erro de rede: servidor IPTV não respondeu");
-                break;
-              case Hls.ErrorTypes.MEDIA_ERROR:
-                setLastError("Erro de mídia/decodificação. Tentando recuperar...");
-                try {
-                  hls.recoverMediaError();
-                } catch {
-                  scheduleReconnect("Erro de mídia não recuperável");
-                }
-                break;
-              default:
-                setLastError("Erro fatal desconhecido no HLS. Alternando para fallback.");
-                setUseReactPlayer(true);
-                break;
-            }
-          }
-        });
-      } else {
-        // Safari/iOS: HLS nativo
-        v.src = url;
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        // aplica estado atual sem reinicializações subsequentes
         v.muted = isMuted;
         v.volume = volumeUI;
-        v.play().then(() => setLoading(false)).catch(() => setUseReactPlayer(true));
-      }
+        v.play().catch(() => setUseReactPlayer(true));
+      });
+      hls.on(Hls.Events.LEVEL_LOADED, () => setLoading(false));
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (data.fatal) {
+          setLastError(`Erro HLS: ${data.type}`);
+          onErrorPlayback?.();
+          setUseReactPlayer(true);
+        }
+      });
     } else if (isDash) {
-      // DASH com dash.js
       const dash = dashjs.MediaPlayer().create();
       dashRef.current = dash;
       dash.initialize(v, url, true);
-      dash.updateSettings({
-        streaming: {
-          lowLatencyEnabled: false,
-          stableBufferTime: 20,
-        },
+      dash.on(dashjs.MediaPlayer.events.PLAYBACK_STARTED, () => {
+        // aplica estado atual
+        v.muted = isMuted;
+        v.volume = volumeUI;
+        setLoading(false);
       });
-      dash.on(dashjs.MediaPlayer.events.PLAYBACK_STARTED, () => setLoading(false));
-      dash.on(dashjs.MediaPlayer.events.ERROR, (e: any) => {
-        setLastError(`Erro DASH: ${e?.error || "desconhecido"}`);
+      dash.on(dashjs.MediaPlayer.events.ERROR, () => {
+        setLastError("Erro DASH");
+        onErrorPlayback?.();
         setUseReactPlayer(true);
       });
     } else if (isNativeFile) {
-      // Formatos nativos (MP4/WebM/Ogg)
       v.src = url;
       v.muted = isMuted;
       v.volume = volumeUI;
-      v.play().then(() => setLoading(false)).catch(() => setUseReactPlayer(true));
+      v.play()
+        .then(() => setLoading(false))
+        .catch(() => {
+          setLastError("Erro ao iniciar arquivo nativo.");
+          onErrorPlayback?.();
+          setUseReactPlayer(true);
+        });
     } else {
-      // Fallback universal
+      // formato desconhecido → tenta ReactPlayer
       setUseReactPlayer(true);
       setLoading(true);
     }
 
-    // Eventos do <video> para diagnóstico e reconexão
+    // listener de erro do <video>
     const onVideoError = () => {
-      const err = v.error;
-      if (!err) return;
-      switch (err.code) {
-        case MediaError.MEDIA_ERR_ABORTED:
-          setLastError("Reprodução abortada.");
-          break;
-        case MediaError.MEDIA_ERR_NETWORK:
-          scheduleReconnect("Erro de rede: servidor IPTV não respondeu");
-          break;
-        case MediaError.MEDIA_ERR_DECODE:
-          setLastError("Erro de decodificação: formato inválido ou corrompido.");
-          break;
-        case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-          setLastError("Formato não suportado pelo navegador.");
-          break;
-        default:
-          setLastError("Erro desconhecido no player.");
-      }
-    };
-    const onStalled = () => {
-      setLastError("Fluxo de dados interrompido: servidor não está enviando pacotes.");
-      startStallTimer();
-    };
-    const onWaiting = () => {
-      startStallTimer();
-    };
-    const onPlaying = () => {
-      clearStallTimer();
-      setLastError(null);
-    };
-    const onCanPlay = () => {
-      clearStallTimer();
-      setLoading(false);
-    };
-    const onLoadedData = () => {
-      clearStallTimer();
-      setLoading(false);
+      setLastError("Falha ao reproduzir canal.");
+      onErrorPlayback?.();
     };
 
     v.addEventListener("error", onVideoError);
-    v.addEventListener("stalled", onStalled);
-    v.addEventListener("waiting", onWaiting);
-    v.addEventListener("playing", onPlaying);
-    v.addEventListener("canplay", onCanPlay);
-    v.addEventListener("loadeddata", onLoadedData);
 
     return () => {
       v.removeEventListener("error", onVideoError);
-      v.removeEventListener("stalled", onStalled);
-      v.removeEventListener("waiting", onWaiting);
-      v.removeEventListener("playing", onPlaying);
-      v.removeEventListener("canplay", onCanPlay);
-      v.removeEventListener("loadeddata", onLoadedData);
-      clearStallTimer();
       if (hlsRef.current) {
         try { hlsRef.current.destroy(); } catch {}
         hlsRef.current = null;
@@ -271,17 +145,26 @@ export default function TVPlayer({
         dashRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url]);
+    // Importante: não dependa de isMuted/volumeUI aqui para evitar reinicialização
+  }, [url, onErrorPlayback]);
 
-  // Fullscreen
+  // Efeito separado: aplicar mute/volume sem reinicializar o player
+  useEffect(() => {
+    if (useReactPlayer) return; // ReactPlayer recebe via props
+    const v = videoRef.current;
+    if (!v) return;
+    v.muted = isMuted;
+    v.volume = volumeUI;
+  }, [isMuted, volumeUI, useReactPlayer]);
+
+  // fullscreen
   useEffect(() => {
     const handleFsChange = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener("fullscreenchange", handleFsChange);
     return () => document.removeEventListener("fullscreenchange", handleFsChange);
   }, []);
 
-  // UI auto-hide
+  // esconder UI após inatividade
   useEffect(() => {
     let timer: number;
     const handleMove = () => {
@@ -331,7 +214,6 @@ export default function TVPlayer({
     }
   }
 
-  // Fechamento limpo: pausa, limpa src e destrói HLS/DASH
   function handleClose() {
     const v = videoRef.current;
     if (v) {
@@ -355,13 +237,12 @@ export default function TVPlayer({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Backdrop que fecha com limpeza completa */}
+      {/* Backdrop que fecha */}
       <div className="fixed inset-0 bg-black/70" onClick={handleClose} />
       <div
         ref={containerRef}
         className="relative z-50 w-full max-w-6xl bg-black rounded-lg overflow-hidden"
       >
-        {/* Área do player */}
         <div className="relative bg-black">
           {!useReactPlayer ? (
             <video
@@ -380,7 +261,7 @@ export default function TVPlayer({
               onLoadedData={() => setLoading(false)}
               onCanPlay={() => setLoading(false)}
               onEnded={() => {
-                // Live: tenta retomar
+                // Em live, tenta retomar
                 videoRef.current?.play().catch(() => {});
               }}
             />
@@ -396,7 +277,6 @@ export default function TVPlayer({
               playsinline
               config={{
                 file: {
-                  // Força engines quando possível
                   forceHLS: true,
                   forceDASH: true,
                   forceVideo: true,
@@ -411,6 +291,7 @@ export default function TVPlayer({
               onEnded={() => setIsPlaying(true)}
               onError={() => {
                 setLastError("Falha no fallback ReactPlayer.");
+                onErrorPlayback?.();
               }}
             />
           )}
@@ -422,7 +303,7 @@ export default function TVPlayer({
             </div>
           )}
 
-          {/* Exibição de erro (diagnóstico) */}
+          {/* Erros */}
           {lastError && (
             <div className="absolute bottom-16 left-0 right-0 text-center text-red-500 font-bold bg-black/70 p-2">
               {lastError}
@@ -461,10 +342,10 @@ export default function TVPlayer({
             }`}
           >
             <div className="flex items-center gap-3">
-              <button onClick={togglePlay}>
+              <button onClick={togglePlay} aria-label={isPlaying ? "Pausar" : "Reproduzir"}>
                 {isPlaying ? <MdPause size={28} /> : <MdPlayArrow size={28} />}
               </button>
-              <button onClick={toggleMute}>
+              <button onClick={toggleMute} aria-label={isMuted ? "Ativar som" : "Silenciar"}>
                 {isMuted ? <MdVolumeOff size={24} /> : <MdVolumeUp size={24} />}
               </button>
               <input
@@ -475,14 +356,11 @@ export default function TVPlayer({
                 value={volumeUI}
                 onChange={(e) => handleVolumeChange(Number(e.target.value))}
                 className="w-28 accent-blue-500"
+                aria-label="Volume"
               />
             </div>
-            <button onClick={toggleFs}>
-              {isFullscreen ? (
-                <MdFullscreenExit size={24} />
-              ) : (
-                <MdFullscreen size={24} />
-              )}
+            <button onClick={toggleFs} aria-label={isFullscreen ? "Sair de tela cheia" : "Tela cheia"}>
+              {isFullscreen ? <MdFullscreenExit size={24} /> : <MdFullscreen size={24} />}
             </button>
           </div>
         </div>

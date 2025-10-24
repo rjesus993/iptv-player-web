@@ -1,19 +1,32 @@
 import { useAuthStore } from "../features/auth/store";
-import { loadChannels, loadChannelCategories, Channel } from "../features/channels/service";
+import {
+  loadChannels,
+  loadChannelCategories,
+  Channel,
+} from "../features/channels/service";
 import { useEffect, useState } from "react";
 import Player from "./Player";
 import ChannelCard from "./ChannelCard";
 
 export default function ChannelGrid() {
   const auth = useAuthStore();
-  const [channels, setChannels] = useState<Channel[]>([]);
-  const [filtered, setFiltered] = useState<Channel[]>([]);
+  const [channels, setChannels] = useState<(Channel & { alive?: boolean })[]>([]);
+  const [filtered, setFiltered] = useState<(Channel & { alive?: boolean })[]>([]);
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentChannel, setCurrentChannel] = useState<Channel | null>(null);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
+
+  // Marca canal como OFFLINE quando o Player reporta erro
+  function markChannelOffline(channelId: string) {
+    setChannels((prev) =>
+      prev.map((c) =>
+        c.id === channelId ? { ...c, alive: false } : c
+      )
+    );
+  }
 
   useEffect(() => {
     if (!auth || auth.type !== "xtream") return;
@@ -35,8 +48,10 @@ export default function ChannelGrid() {
       }),
     ])
       .then(([chs, cats]) => {
-        setChannels(chs);
-        setFiltered(chs);
+        // Inicialmente todos como "desconhecido" (alive = true por padrão)
+        const withStatus = chs.map((c) => ({ ...c, alive: true }));
+        setChannels(withStatus);
+        setFiltered(withStatus);
         setCategories([{ id: "all", name: "Todas" }, ...cats]);
       })
       .catch(() => setError("Erro ao carregar canais/categorias"))
@@ -90,11 +105,17 @@ export default function ChannelGrid() {
 
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
         {filtered.map((ch) => (
-          <ChannelCard
-            key={ch.id}
-            channel={ch}
-            onClick={() => setCurrentChannel(ch)}
-          />
+          <div key={ch.id} className="relative">
+            <ChannelCard
+              channel={ch}
+              onClick={() => setCurrentChannel(ch)}
+            />
+            {ch.alive === false && (
+              <span className="absolute top-1 right-1 bg-red-600 text-white text-xs px-2 py-0.5 rounded">
+                OFFLINE
+              </span>
+            )}
+          </div>
         ))}
       </div>
 
@@ -104,6 +125,7 @@ export default function ChannelGrid() {
           channelName={currentChannel.name}
           channelLogo={currentChannel.logo}
           onClose={() => setCurrentChannel(null)}
+          onErrorPlayback={() => markChannelOffline(currentChannel.id)} // integração
         />
       )}
     </div>
