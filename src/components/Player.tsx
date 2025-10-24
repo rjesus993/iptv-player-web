@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
+import dashjs from "dashjs"; // Suporte a MPEG-DASH
 import ReactPlayer from "react-player";
 import {
   MdPlayArrow,
@@ -25,6 +26,7 @@ export default function TVPlayer({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const dashRef = useRef<dashjs.MediaPlayerClass | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(true);
   const [isMuted, setIsMuted] = useState(false);
@@ -33,8 +35,13 @@ export default function TVPlayer({
   const [useReactPlayer, setUseReactPlayer] = useState(false);
   const [showUI, setShowUI] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [lastError, setLastError] = useState<string | null>(null);
 
-  // Aplica volume direto no elemento <video> para evitar re-render do player
+  // Reconexão (apenas para cenários de rede/timeouts)
+  const [retryCount, setRetryCount] = useState(0);
+  const maxRetries = 5;
+  const stallTimerRef = useRef<number | null>(null);
+
   function handleVolumeChange(val: number) {
     setVolumeUI(val);
     const v = videoRef.current;
@@ -44,101 +51,244 @@ export default function TVPlayer({
     }
   }
 
-  // Inicialização do player HLS + fallback
+  function clearStallTimer() {
+    if (stallTimerRef.current) {
+      window.clearTimeout(stallTimerRef.current);
+      stallTimerRef.current = null;
+    }
+  }
+
+  function startStallTimer() {
+    clearStallTimer();
+    stallTimerRef.current = window.setTimeout(() => {
+      scheduleReconnect("Timeout de dados: servidor IPTV não forneceu segmentos");
+    }, 15000);
+  }
+
+  function scheduleReconnect(reason: string) {
+    // Para streams VOD (mp4/webm/ogg), reconexão é menos útil; focamos em HLS/DASH/live
+    if (retryCount >= maxRetries) {
+      setLastError(`${reason} — Limite de tentativas atingido.`);
+      return;
+    }
+    const nextRetry = retryCount + 1;
+    const delay = Math.min(5000 * nextRetry, 30000);
+    setLastError(`${reason} — Tentando reconectar em ${delay / 1000}s...`);
+    setRetryCount(nextRetry);
+
+    window.setTimeout(() => {
+      const v = videoRef.current;
+      if (v) {
+        try {
+          v.load();
+          v.play().catch(() => {});
+        } catch {}
+      }
+      if (hlsRef.current) {
+        try {
+          hlsRef.current.startLoad();
+        } catch {}
+      }
+      if (dashRef.current) {
+        try {
+          // Reinicializa reprodução em DASH
+          dashRef.current.play();
+        } catch {}
+      }
+    }, delay);
+  }
+
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
 
     setLoading(true);
     setUseReactPlayer(false);
+    setLastError(null);
+    setRetryCount(0);
+    clearStallTimer();
 
-    // Destrói instância anterior de HLS se existir
+    // Limpa instâncias anteriores
     if (hlsRef.current) {
       try {
         hlsRef.current.destroy();
       } catch {}
       hlsRef.current = null;
     }
+    if (dashRef.current) {
+      try {
+        dashRef.current.reset();
+      } catch {}
+      dashRef.current = null;
+    }
 
-    if (Hls.isSupported() && url.endsWith(".m3u8")) {
-      const hls = new Hls({
-        enableWorker: true,
-        lowLatencyMode: false,   // estabilidade
-        liveSyncDuration: 20,    // ~20s atrás do ao vivo
-        liveMaxLatencyDuration: 60,
-        maxLiveSyncPlaybackRate: 1.0,
-        backBufferLength: 300,   // até 5min de histórico
-        maxBufferLength: 60,     // tenta manter ~60s em buffer
-        maxBufferHole: 1,
-        startPosition: -20,      // começa ~20s atrás do live edge
-      });
-      hlsRef.current = hls;
+    const isHls = url.toLowerCase().endsWith(".m3u8");
+    const isDash = url.toLowerCase().endsWith(".mpd");
+    const isNativeFile = /\.(mp4|webm|ogg)(\?.*)?$/i.test(url);
 
-      hls.loadSource(url);
-      hls.attachMedia(v);
+    if (isHls && (Hls.isSupported() || /Safari/i.test(navigator.userAgent))) {
+      // HLS: usar hls.js quando suportado; no Safari/iOS o <video> suporta nativamente
+      if (Hls.isSupported()) {
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: false,
+          liveSyncDuration: 20,
+          liveMaxLatencyDuration: 60,
+          maxLiveSyncPlaybackRate: 1.0,
+          backBufferLength: 300,
+          maxBufferLength: 60,
+          maxBufferHole: 1,
+          startPosition: -20,
+        });
+        hlsRef.current = hls;
+        hls.loadSource(url);
+        hls.attachMedia(v);
 
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          v.muted = isMuted;
+          v.volume = volumeUI;
+          v.play().catch(() => setUseReactPlayer(true));
+        });
+        hls.on(Hls.Events.LEVEL_LOADED, () => setLoading(false));
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (data.fatal) {
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                scheduleReconnect("Erro de rede: servidor IPTV não respondeu");
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                setLastError("Erro de mídia/decodificação. Tentando recuperar...");
+                try {
+                  hls.recoverMediaError();
+                } catch {
+                  scheduleReconnect("Erro de mídia não recuperável");
+                }
+                break;
+              default:
+                setLastError("Erro fatal desconhecido no HLS. Alternando para fallback.");
+                setUseReactPlayer(true);
+                break;
+            }
+          }
+        });
+      } else {
+        // Safari/iOS: HLS nativo
+        v.src = url;
         v.muted = isMuted;
         v.volume = volumeUI;
-        v.play().catch(() => setUseReactPlayer(true));
+        v.play().then(() => setLoading(false)).catch(() => setUseReactPlayer(true));
+      }
+    } else if (isDash) {
+      // DASH com dash.js
+      const dash = dashjs.MediaPlayer().create();
+      dashRef.current = dash;
+      dash.initialize(v, url, true);
+      dash.updateSettings({
+        streaming: {
+          lowLatencyEnabled: false,
+          stableBufferTime: 20,
+        },
       });
-
-      hls.on(Hls.Events.LEVEL_LOADED, () => setLoading(false));
-
-      hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (data.fatal) {
-          switch (data.type) {
-            case Hls.ErrorTypes.NETWORK_ERROR:
-              hls.startLoad();
-              break;
-            case Hls.ErrorTypes.MEDIA_ERROR:
-              hls.recoverMediaError();
-              break;
-            default:
-              setUseReactPlayer(true);
-              break;
-          }
-        }
+      dash.on(dashjs.MediaPlayer.events.PLAYBACK_STARTED, () => setLoading(false));
+      dash.on(dashjs.MediaPlayer.events.ERROR, (e: any) => {
+        setLastError(`Erro DASH: ${e?.error || "desconhecido"}`);
+        setUseReactPlayer(true);
       });
-    } else {
-      // Vídeo nativo para URLs não-HLS
+    } else if (isNativeFile) {
+      // Formatos nativos (MP4/WebM/Ogg)
       v.src = url;
       v.muted = isMuted;
       v.volume = volumeUI;
       v.play().then(() => setLoading(false)).catch(() => setUseReactPlayer(true));
+    } else {
+      // Fallback universal
+      setUseReactPlayer(true);
+      setLoading(true);
     }
 
-    // Auto-recuperação simples em caso de erro
-    function onError() {
-      v.load();
-      v.play().catch(() => {});
-    }
-    v.addEventListener("error", onError);
+    // Eventos do <video> para diagnóstico e reconexão
+    const onVideoError = () => {
+      const err = v.error;
+      if (!err) return;
+      switch (err.code) {
+        case MediaError.MEDIA_ERR_ABORTED:
+          setLastError("Reprodução abortada.");
+          break;
+        case MediaError.MEDIA_ERR_NETWORK:
+          scheduleReconnect("Erro de rede: servidor IPTV não respondeu");
+          break;
+        case MediaError.MEDIA_ERR_DECODE:
+          setLastError("Erro de decodificação: formato inválido ou corrompido.");
+          break;
+        case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+          setLastError("Formato não suportado pelo navegador.");
+          break;
+        default:
+          setLastError("Erro desconhecido no player.");
+      }
+    };
+    const onStalled = () => {
+      setLastError("Fluxo de dados interrompido: servidor não está enviando pacotes.");
+      startStallTimer();
+    };
+    const onWaiting = () => {
+      startStallTimer();
+    };
+    const onPlaying = () => {
+      clearStallTimer();
+      setLastError(null);
+    };
+    const onCanPlay = () => {
+      clearStallTimer();
+      setLoading(false);
+    };
+    const onLoadedData = () => {
+      clearStallTimer();
+      setLoading(false);
+    };
+
+    v.addEventListener("error", onVideoError);
+    v.addEventListener("stalled", onStalled);
+    v.addEventListener("waiting", onWaiting);
+    v.addEventListener("playing", onPlaying);
+    v.addEventListener("canplay", onCanPlay);
+    v.addEventListener("loadeddata", onLoadedData);
 
     return () => {
-      v.removeEventListener("error", onError);
+      v.removeEventListener("error", onVideoError);
+      v.removeEventListener("stalled", onStalled);
+      v.removeEventListener("waiting", onWaiting);
+      v.removeEventListener("playing", onPlaying);
+      v.removeEventListener("canplay", onCanPlay);
+      v.removeEventListener("loadeddata", onLoadedData);
+      clearStallTimer();
+      if (hlsRef.current) {
+        try { hlsRef.current.destroy(); } catch {}
+        hlsRef.current = null;
+      }
+      if (dashRef.current) {
+        try { dashRef.current.reset(); } catch {}
+        dashRef.current = null;
+      }
     };
-    // Dependendo apenas de url para não re-renderizar player ao ajustar volume
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url]);
 
-  // Detecta mudanças de fullscreen
+  // Fullscreen
   useEffect(() => {
-    function handleFsChange() {
-      setIsFullscreen(!!document.fullscreenElement);
-    }
+    const handleFsChange = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener("fullscreenchange", handleFsChange);
     return () => document.removeEventListener("fullscreenchange", handleFsChange);
   }, []);
 
-  // Timer de inatividade estilo YouTube
+  // UI auto-hide
   useEffect(() => {
     let timer: number;
-    function handleMove() {
+    const handleMove = () => {
       setShowUI(true);
       clearTimeout(timer);
       timer = window.setTimeout(() => setShowUI(false), 2500);
-    }
+    };
     const container = containerRef.current;
     if (!container) return;
     container.addEventListener("mousemove", handleMove);
@@ -181,22 +331,22 @@ export default function TVPlayer({
     }
   }
 
-  // Fechamento limpo: pausa, limpa src e destrói HLS
+  // Fechamento limpo: pausa, limpa src e destrói HLS/DASH
   function handleClose() {
     const v = videoRef.current;
     if (v) {
-      try {
-        v.pause();
-      } catch {}
+      try { v.pause(); } catch {}
       v.src = "";
       v.removeAttribute("src");
       v.load();
     }
     if (hlsRef.current) {
-      try {
-        hlsRef.current.destroy();
-      } catch {}
+      try { hlsRef.current.destroy(); } catch {}
       hlsRef.current = null;
+    }
+    if (dashRef.current) {
+      try { dashRef.current.reset(); } catch {}
+      dashRef.current = null;
     }
     setUseReactPlayer(false);
     setIsPlaying(false);
@@ -222,6 +372,11 @@ export default function TVPlayer({
               preload="auto"
               muted={isMuted}
               className="w-full h-full"
+              onPlay={() => {
+                setIsPlaying(true);
+                setLastError(null);
+              }}
+              onPause={() => setIsPlaying(false)}
               onLoadedData={() => setLoading(false)}
               onCanPlay={() => setLoading(false)}
               onEnded={() => {
@@ -234,8 +389,6 @@ export default function TVPlayer({
               url={url}
               playing={isPlaying}
               muted={isMuted}
-              // Nota: ReactPlayer aceita volume como estado;
-              // se causar tela preta no fallback, remova 'volume' daqui.
               volume={volumeUI}
               width="100%"
               height="100%"
@@ -243,14 +396,22 @@ export default function TVPlayer({
               playsinline
               config={{
                 file: {
+                  // Força engines quando possível
                   forceHLS: true,
+                  forceDASH: true,
                   forceVideo: true,
                   attributes: { preload: "auto", playsInline: true },
                 },
               }}
-              onReady={() => setLoading(false)}
+              onReady={() => {
+                setLoading(false);
+                setLastError(null);
+              }}
               onStart={() => setLoading(false)}
               onEnded={() => setIsPlaying(true)}
+              onError={() => {
+                setLastError("Falha no fallback ReactPlayer.");
+              }}
             />
           )}
 
@@ -258,6 +419,13 @@ export default function TVPlayer({
           {loading && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/60">
               <div className="h-12 w-12 border-4 border-white border-t-transparent rounded-full animate-spin" />
+            </div>
+          )}
+
+          {/* Exibição de erro (diagnóstico) */}
+          {lastError && (
+            <div className="absolute bottom-16 left-0 right-0 text-center text-red-500 font-bold bg-black/70 p-2">
+              {lastError}
             </div>
           )}
 
