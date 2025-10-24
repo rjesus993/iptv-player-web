@@ -123,3 +123,20 @@ export async function loadSeries(source: XtreamConfig) {
     plot: s.plot,
   }));
 }
+
+/* 🔹 Carregar categorias de séries */
+export async function loadSeriesCategories(source: XtreamConfig) {
+  const base = source.host.replace(/\/$/, "");
+  const url = `${base}/player_api.php?username=${encodeURIComponent(
+    source.username
+  )}&password=${encodeURIComponent(source.password)}&action=get_series_categories`;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Erro ao carregar categorias de séries");
+  const data = await res.json();
+
+  return data.map((c: any) => ({
+    id: c.category_id,
+    name: c.category_name,
+  }));
+}
