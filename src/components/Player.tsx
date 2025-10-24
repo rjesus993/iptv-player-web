@@ -24,32 +24,68 @@ export default function TVPlayer({
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const hlsRef = useRef<Hls | null>(null);
+
   const [isPlaying, setIsPlaying] = useState(true);
   const [isMuted, setIsMuted] = useState(false);
-  const [volume, setVolume] = useState(1);
+  const [volumeUI, setVolumeUI] = useState(1); // controla apenas o slider
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [useReactPlayer, setUseReactPlayer] = useState(false);
   const [showUI, setShowUI] = useState(true);
   const [loading, setLoading] = useState(true);
 
-  // Inicializa vídeo com suporte a HLS e fallback
+  // Aplica volume direto no elemento <video> para evitar re-render do player
+  function handleVolumeChange(val: number) {
+    setVolumeUI(val);
+    const v = videoRef.current;
+    if (v && !useReactPlayer) {
+      v.volume = val;
+      v.muted = val === 0;
+    }
+  }
+
+  // Inicialização do player HLS + fallback
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
 
+    setLoading(true);
+    setUseReactPlayer(false);
+
+    // Destrói instância anterior de HLS se existir
+    if (hlsRef.current) {
+      try {
+        hlsRef.current.destroy();
+      } catch {}
+      hlsRef.current = null;
+    }
+
     if (Hls.isSupported() && url.endsWith(".m3u8")) {
       const hls = new Hls({
         enableWorker: true,
-        lowLatencyMode: false,        // desliga LL-HLS para estabilidade
-        liveSyncDuration: 10,         // alvo: ~10s atrás do ao vivo
-        liveMaxLatencyDuration: 30,   // pode atrasar até 30s
-        maxLiveSyncPlaybackRate: 1.0, // não acelera para alcançar o ao vivo
-        backBufferLength: 120,        // mantém até 2min de buffer
+        lowLatencyMode: false,   // estabilidade
+        liveSyncDuration: 20,    // ~20s atrás do ao vivo
+        liveMaxLatencyDuration: 60,
+        maxLiveSyncPlaybackRate: 1.0,
+        backBufferLength: 300,   // até 5min de histórico
+        maxBufferLength: 60,     // tenta manter ~60s em buffer
+        maxBufferHole: 1,
+        startPosition: -20,      // começa ~20s atrás do live edge
       });
+      hlsRef.current = hls;
+
       hls.loadSource(url);
       hls.attachMedia(v);
 
-      hls.on(Hls.Events.ERROR, (event, data) => {
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        v.muted = isMuted;
+        v.volume = volumeUI;
+        v.play().catch(() => setUseReactPlayer(true));
+      });
+
+      hls.on(Hls.Events.LEVEL_LOADED, () => setLoading(false));
+
+      hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal) {
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
@@ -65,18 +101,25 @@ export default function TVPlayer({
         }
       });
     } else {
+      // Vídeo nativo para URLs não-HLS
       v.src = url;
-      v.play().catch(() => setUseReactPlayer(true));
+      v.muted = isMuted;
+      v.volume = volumeUI;
+      v.play().then(() => setLoading(false)).catch(() => setUseReactPlayer(true));
     }
 
-    v.muted = isMuted;
-    v.volume = volume;
-
-    // Reinicializa em caso de erro
-    v.addEventListener("error", () => {
+    // Auto-recuperação simples em caso de erro
+    function onError() {
       v.load();
       v.play().catch(() => {});
-    });
+    }
+    v.addEventListener("error", onError);
+
+    return () => {
+      v.removeEventListener("error", onError);
+    };
+    // Dependendo apenas de url para não re-renderizar player ao ajustar volume
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url]);
 
   // Detecta mudanças de fullscreen
@@ -107,36 +150,26 @@ export default function TVPlayer({
   }, []);
 
   function togglePlay() {
-    setIsPlaying(!isPlaying);
-    if (!useReactPlayer) {
-      const v = videoRef.current;
-      if (!v) return;
-      if (v.paused) {
-        v.play().then(() => setIsPlaying(true));
-      } else {
-        v.pause();
-        setIsPlaying(false);
+    setIsPlaying((prev) => {
+      const next = !prev;
+      if (!useReactPlayer) {
+        const v = videoRef.current;
+        if (v) {
+          if (next) v.play().catch(() => {});
+          else v.pause();
+        }
       }
-    }
+      return next;
+    });
   }
 
   function toggleMute() {
-    setIsMuted(!isMuted);
-    if (!useReactPlayer) {
+    setIsMuted((prev) => {
+      const next = !prev;
       const v = videoRef.current;
-      if (!v) return;
-      v.muted = !v.muted;
-    }
-  }
-
-  function changeVolume(val: number) {
-    setVolume(val);
-    setIsMuted(val === 0);
-    if (!useReactPlayer) {
-      const v = videoRef.current;
-      if (!v) return;
-      v.volume = val;
-    }
+      if (v && !useReactPlayer) v.muted = next;
+      return next;
+    });
   }
 
   function toggleFs() {
@@ -148,15 +181,37 @@ export default function TVPlayer({
     }
   }
 
+  // Fechamento limpo: pausa, limpa src e destrói HLS
+  function handleClose() {
+    const v = videoRef.current;
+    if (v) {
+      try {
+        v.pause();
+      } catch {}
+      v.src = "";
+      v.removeAttribute("src");
+      v.load();
+    }
+    if (hlsRef.current) {
+      try {
+        hlsRef.current.destroy();
+      } catch {}
+      hlsRef.current = null;
+    }
+    setUseReactPlayer(false);
+    setIsPlaying(false);
+    onClose();
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Fundo escuro */}
-      <div className="fixed inset-0 bg-black/70" onClick={onClose} />
+      {/* Backdrop que fecha com limpeza completa */}
+      <div className="fixed inset-0 bg-black/70" onClick={handleClose} />
       <div
         ref={containerRef}
         className="relative z-50 w-full max-w-6xl bg-black rounded-lg overflow-hidden"
       >
-        {/* Player */}
+        {/* Área do player */}
         <div className="relative bg-black">
           {!useReactPlayer ? (
             <video
@@ -170,7 +225,7 @@ export default function TVPlayer({
               onLoadedData={() => setLoading(false)}
               onCanPlay={() => setLoading(false)}
               onEnded={() => {
-                // reinicia se for live
+                // Live: tenta retomar
                 videoRef.current?.play().catch(() => {});
               }}
             />
@@ -179,7 +234,9 @@ export default function TVPlayer({
               url={url}
               playing={isPlaying}
               muted={isMuted}
-              volume={volume}
+              // Nota: ReactPlayer aceita volume como estado;
+              // se causar tela preta no fallback, remova 'volume' daqui.
+              volume={volumeUI}
               width="100%"
               height="100%"
               controls={false}
@@ -188,22 +245,16 @@ export default function TVPlayer({
                 file: {
                   forceHLS: true,
                   forceVideo: true,
-                  attributes: {
-                    preload: "auto",
-                    playsInline: true,
-                  },
+                  attributes: { preload: "auto", playsInline: true },
                 },
               }}
               onReady={() => setLoading(false)}
               onStart={() => setLoading(false)}
-              onEnded={() => {
-                // reinicia se interpretar como VOD
-                setIsPlaying(true);
-              }}
+              onEnded={() => setIsPlaying(true)}
             />
           )}
 
-          {/* Loading indicator */}
+          {/* Loading */}
           {loading && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/60">
               <div className="h-12 w-12 border-4 border-white border-t-transparent rounded-full animate-spin" />
@@ -221,13 +272,16 @@ export default function TVPlayer({
                 src={channelLogo || "/fallback.png"}
                 alt={channelName}
                 className="w-8 h-8 object-contain"
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).src = "/fallback.png";
+                }}
               />
               <span className="text-white font-semibold">{channelName}</span>
               <span className="ml-2 rounded bg-red-600 px-2 py-0.5 text-xs font-bold text-white">
                 AO VIVO
               </span>
             </div>
-            <button onClick={onClose} className="text-white text-2xl">
+            <button onClick={handleClose} className="text-white text-2xl">
               <MdClose />
             </button>
           </div>
@@ -250,9 +304,9 @@ export default function TVPlayer({
                 min={0}
                 max={1}
                 step={0.01}
-                value={volume}
-                onChange={(e) => changeVolume(Number(e.target.value))}
-                className="w-24 accent-blue-500"
+                value={volumeUI}
+                onChange={(e) => handleVolumeChange(Number(e.target.value))}
+                className="w-28 accent-blue-500"
               />
             </div>
             <button onClick={toggleFs}>
