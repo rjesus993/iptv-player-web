@@ -1,32 +1,9 @@
-export interface XtreamChannel {
-  num: string;
-  name: string;
-  stream_id: number;
-  stream_icon: string;
-  category_id: string;
-  stream_type: string;
-  url: string;
-}
-
-export interface XtreamResponse {
-  user_info: {
-    username: string;
-    password: string;
-    status: string;
-  };
-  server_info: {
-    url: string;
-    port: string;
-  };
-  available_channels?: XtreamChannel[];
-}
-
 export async function fetchXtreamChannels(
   host: string,
   username: string,
   password: string
-): Promise<XtreamChannel[]> {
-  const apiUrl = `${host.replace(/\/$/, "")}/player_api.php?username=${username}&password=${password}`;
+) {
+  const apiUrl = `${host.replace(/\/$/, "")}/player_api.php?username=${username}&password=${password}&action=get_live_streams`;
 
   const res = await fetch(apiUrl);
   if (!res.ok) {
@@ -34,12 +11,9 @@ export async function fetchXtreamChannels(
   }
 
   const data = await res.json();
+  console.log("Resposta Xtream (canais):", data);
 
-  // Alguns servidores retornam em `available_channels`, outros em `live`
-  const channels = data.available_channels || data.live || [];
-
-  // Normaliza para um formato consistente
-  return channels.map((c: any) => ({
+  return data.map((c: any) => ({
     num: c.num,
     name: c.name,
     stream_id: c.stream_id,

@@ -8,6 +8,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@iptv/playlist": "^1.2.1",
+    "@iptv/xtream-api": "^1.4.1",
     "hls.js": "^1.6.13",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
