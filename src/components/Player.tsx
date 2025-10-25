@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import Hls from "hls.js";
 import dashjs from "dashjs";
 import ReactPlayer from "react-player";
+// import FocusTrap from "focus-trap-react"; // Descomente se quiser adicionar depois
 import {
   MdPlayArrow,
   MdPause,
@@ -10,21 +11,74 @@ import {
   MdFullscreen,
   MdFullscreenExit,
   MdClose,
+  MdReplay,
 } from "react-icons/md";
 
-export default function TVPlayer({
-  url,
-  channelName,
-  channelLogo,
-  onClose,
-  onErrorPlayback, // callback para marcar OFFLINE no grid
-}: {
+interface TVPlayerProps {
   url: string;
   channelName: string;
   channelLogo?: string;
   onClose: () => void;
   onErrorPlayback?: () => void;
-}) {
+}
+
+// Hook custom para controles
+const usePlayerControls = (
+  videoRef: React.RefObject<HTMLVideoElement>,
+  isPlaying: boolean,
+  setIsPlaying: (playing: boolean) => void,
+  isMuted: boolean,
+  setIsMuted: (muted: boolean) => void,
+  volumeUI: number,
+  setVolumeUI: (volume: number) => void,
+  useReactPlayer: boolean
+) => {
+  const togglePlay = useCallback(() => {
+    setIsPlaying((prev) => {
+      const next = !prev;
+      if (!useReactPlayer && videoRef.current) {
+        if (next) {
+          videoRef.current.play().catch(() => {});
+        } else {
+          videoRef.current.pause();
+        }
+      }
+      return next;
+    });
+  }, [setIsPlaying, useReactPlayer, videoRef]);
+
+  const toggleMute = useCallback(() => {
+    setIsMuted((prev) => {
+      const next = !prev;
+      if (!useReactPlayer && videoRef.current) {
+        videoRef.current.muted = next;
+      }
+      return next;
+    });
+  }, [setIsMuted, useReactPlayer, videoRef]);
+
+  const handleVolumeChange = useCallback(
+    (val: number) => {
+      console.log("Volume mudando para:", val); // Debug: remova após testar
+      setVolumeUI(val);
+      if (!useReactPlayer && videoRef.current) {
+        videoRef.current.volume = val;
+        videoRef.current.muted = val === 0;
+      }
+    },
+    [setVolumeUI, useReactPlayer, videoRef]
+  );
+
+  return { togglePlay, toggleMute, handleVolumeChange };
+};
+
+export default function TVPlayer({
+  url,
+  channelName,
+  channelLogo = "/fallback.png",
+  onClose,
+  onErrorPlayback,
+}: TVPlayerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -38,34 +92,93 @@ export default function TVPlayer({
   const [showUI, setShowUI] = useState(true);
   const [loading, setLoading] = useState(true);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
-  function handleVolumeChange(val: number) {
-    setVolumeUI(val);
-    const v = videoRef.current;
-    if (v && !useReactPlayer) {
-      v.volume = val;
-      v.muted = val === 0 || isMuted;
+  // Debug log: Player montando (remova após testar)
+  useEffect(() => {
+    console.log("Player montando com URL:", url);
+    return () => console.log("Player desmontando");
+  }, [url]);
+
+  // Persistência de volume
+  useEffect(() => {
+    const savedVolume = localStorage.getItem("playerVolume");
+    if (savedVolume) {
+      const vol = parseFloat(savedVolume);
+      setVolumeUI(vol);
+      setIsMuted(vol === 0);
     }
-  }
+  }, []);
 
-  // Inicialização do player (apenas quando a URL muda)
+  useEffect(() => {
+    localStorage.setItem("playerVolume", volumeUI.toString());
+  }, [volumeUI]);
+
+  // Validação de URL
+  useEffect(() => {
+    if (!/^https?:\/\//.test(url)) {
+      setLastError("URL inválida ou insegura.");
+      onErrorPlayback?.();
+      return;
+    }
+  }, [url, onErrorPlayback]);
+
+  // Controles unificados
+  const { togglePlay, toggleMute, handleVolumeChange } = usePlayerControls(
+    videoRef,
+    isPlaying,
+    setIsPlaying,
+    isMuted,
+    setIsMuted,
+    volumeUI,
+    setVolumeUI,
+    useReactPlayer
+  );
+
+  // Cleanup
+  const cleanupPlayer = useCallback(() => {
+    if (hlsRef.current) {
+      try {
+        hlsRef.current.destroy();
+      } catch {}
+      hlsRef.current = null;
+    }
+    if (dashRef.current) {
+      try {
+        dashRef.current.reset();
+      } catch {}
+      dashRef.current = null;
+    }
+    const v = videoRef.current;
+    if (v) {
+      v.pause();
+      v.src = "";
+      v.removeAttribute("src");
+      v.load();
+    }
+  }, []);
+
+  // Retry
+  const handleRetry = useCallback(() => {
+    setRetryCount(0);
+    setLastError(null);
+    setLoading(true);
+    setUseReactPlayer(false);
+    cleanupPlayer();
+  }, [cleanupPlayer]);
+
+  // Inicialização do player (CORREÇÃO: Removidas isMuted e volumeUI das deps para evitar reload no volume)
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
 
+    console.log("Inicializando player para:", url); // Debug
     setLoading(true);
     setUseReactPlayer(false);
     setLastError(null);
+    setRetryCount(0);
 
-    // limpar instâncias anteriores
-    if (hlsRef.current) {
-      try { hlsRef.current.destroy(); } catch {}
-      hlsRef.current = null;
-    }
-    if (dashRef.current) {
-      try { dashRef.current.reset(); } catch {}
-      dashRef.current = null;
-    }
+    cleanupPlayer();
 
     const isHls = url.toLowerCase().endsWith(".m3u8");
     const isDash = url.toLowerCase().endsWith(".mpd");
@@ -74,14 +187,16 @@ export default function TVPlayer({
     if (isHls && Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: true,
-        lowLatencyMode: false,
+        lowLatencyMode: true,
+        maxBufferLength: 10,
+        maxMaxBufferLength: 20,
       });
       hlsRef.current = hls;
       hls.loadSource(url);
       hls.attachMedia(v);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        // aplica estado atual sem reinicializações subsequentes
+        // Aplica volume/mute inicial aqui
         v.muted = isMuted;
         v.volume = volumeUI;
         v.play().catch(() => setUseReactPlayer(true));
@@ -89,9 +204,17 @@ export default function TVPlayer({
       hls.on(Hls.Events.LEVEL_LOADED, () => setLoading(false));
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal) {
-          setLastError(`Erro HLS: ${data.type}`);
-          onErrorPlayback?.();
-          setUseReactPlayer(true);
+          if (
+            data.type === Hls.ErrorTypes.NETWORK_ERROR &&
+            retryCount < 3
+          ) {
+            setRetryCount((prev) => prev + 1);
+            hls.startLoad();
+          } else {
+            setLastError(`Erro HLS: ${data.type}. Tentativas: ${retryCount + 1}`);
+            onErrorPlayback?.();
+            setUseReactPlayer(true);
+          }
         }
       });
     } else if (isDash) {
@@ -99,15 +222,20 @@ export default function TVPlayer({
       dashRef.current = dash;
       dash.initialize(v, url, true);
       dash.on(dashjs.MediaPlayer.events.PLAYBACK_STARTED, () => {
-        // aplica estado atual
+        // Aplica volume/mute inicial aqui
         v.muted = isMuted;
         v.volume = volumeUI;
         setLoading(false);
       });
-      dash.on(dashjs.MediaPlayer.events.ERROR, () => {
-        setLastError("Erro DASH");
-        onErrorPlayback?.();
-        setUseReactPlayer(true);
+      dash.on(dashjs.MediaPlayer.events.ERROR, (data) => {
+        if (data.error === "manifestError" && retryCount < 3) {
+          setRetryCount((prev) => prev + 1);
+          dash.attachSource(url);
+        } else {
+          setLastError(`Erro DASH: ${data.error}. Tentativas: ${retryCount + 1}`);
+          onErrorPlayback?.();
+          setUseReactPlayer(true);
+        }
       });
     } else if (isNativeFile) {
       v.src = url;
@@ -121,12 +249,10 @@ export default function TVPlayer({
           setUseReactPlayer(true);
         });
     } else {
-      // formato desconhecido → tenta ReactPlayer
       setUseReactPlayer(true);
       setLoading(true);
     }
 
-    // listener de erro do <video>
     const onVideoError = () => {
       setLastError("Falha ao reproduzir canal.");
       onErrorPlayback?.();
@@ -136,41 +262,33 @@ export default function TVPlayer({
 
     return () => {
       v.removeEventListener("error", onVideoError);
-      if (hlsRef.current) {
-        try { hlsRef.current.destroy(); } catch {}
-        hlsRef.current = null;
-      }
-      if (dashRef.current) {
-        try { dashRef.current.reset(); } catch {}
-        dashRef.current = null;
-      }
+      cleanupPlayer();
     };
-    // Importante: não dependa de isMuted/volumeUI aqui para evitar reinicialização
-  }, [url, onErrorPlayback]);
+  }, [url, onErrorPlayback, cleanupPlayer]); // CORREÇÃO: Removidas isMuted e volumeUI das deps
 
-  // Efeito separado: aplicar mute/volume sem reinicializar o player
+  // Effect separado para aplicar mudanças de volume/mute SEM reinicializar (mantido)
   useEffect(() => {
-    if (useReactPlayer) return; // ReactPlayer recebe via props
+    if (useReactPlayer) return;
     const v = videoRef.current;
     if (!v) return;
     v.muted = isMuted;
     v.volume = volumeUI;
   }, [isMuted, volumeUI, useReactPlayer]);
 
-  // fullscreen
+  // Fullscreen
   useEffect(() => {
     const handleFsChange = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener("fullscreenchange", handleFsChange);
     return () => document.removeEventListener("fullscreenchange", handleFsChange);
   }, []);
 
-  // esconder UI após inatividade
+  // Auto-hide UI
   useEffect(() => {
-    let timer: number;
+    let timer: NodeJS.Timeout;
     const handleMove = () => {
       setShowUI(true);
       clearTimeout(timer);
-      timer = window.setTimeout(() => setShowUI(false), 2500);
+      timer = setTimeout(() => setShowUI(false), 2500);
     };
     const container = containerRef.current;
     if (!container) return;
@@ -182,28 +300,38 @@ export default function TVPlayer({
     };
   }, []);
 
-  function togglePlay() {
-    setIsPlaying((prev) => {
-      const next = !prev;
-      if (!useReactPlayer) {
-        const v = videoRef.current;
-        if (v) {
-          if (next) v.play().catch(() => {});
-          else v.pause();
-        }
-      }
-      return next;
-    });
-  }
+  // Keyboard shortcuts
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
 
-  function toggleMute() {
-    setIsMuted((prev) => {
-      const next = !prev;
-      const v = videoRef.current;
-      if (v && !useReactPlayer) v.muted = next;
-      return next;
-    });
-  }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target !== container) return;
+      switch (e.key.toLowerCase()) {
+        case " ":
+          e.preventDefault();
+          togglePlay();
+          break;
+        case "m":
+          toggleMute();
+          break;
+        case "f":
+          toggleFs();
+          break;
+        case "escape":
+          handleClose();
+          break;
+      }
+    };
+
+    container.addEventListener("keydown", handleKeyDown);
+    container.addEventListener("touchstart", togglePlay, { passive: true });
+
+    return () => {
+      container.removeEventListener("keydown", handleKeyDown);
+      container.removeEventListener("touchstart", togglePlay);
+    };
+  }, [togglePlay, toggleMute, toggleFs]);
 
   function toggleFs() {
     if (!containerRef.current) return;
@@ -215,35 +343,27 @@ export default function TVPlayer({
   }
 
   function handleClose() {
-    const v = videoRef.current;
-    if (v) {
-      try { v.pause(); } catch {}
-      v.src = "";
-      v.removeAttribute("src");
-      v.load();
-    }
-    if (hlsRef.current) {
-      try { hlsRef.current.destroy(); } catch {}
-      hlsRef.current = null;
-    }
-    if (dashRef.current) {
-      try { dashRef.current.reset(); } catch {}
-      dashRef.current = null;
-    }
+    cleanupPlayer();
     setUseReactPlayer(false);
     setIsPlaying(false);
+    setLoading(true);
     onClose();
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Backdrop que fecha */}
-      <div className="fixed inset-0 bg-black/70" onClick={handleClose} />
+      {/* Backdrop */}
+      <div className="fixed inset-0 bg-black/70" onClick={handleClose} aria-label="Fechar player" />
+      
+      {/* Container */}
       <div
         ref={containerRef}
-        className="relative z-50 w-full max-w-6xl bg-black rounded-lg overflow-hidden"
+        className="relative z-50 w-full max-w-6xl h-auto bg-black rounded-lg overflow-hidden"
+        tabIndex={-1}
+        role="dialog"
+        aria-label={`Player do canal ${channelName}`}
       >
-        <div className="relative bg-black">
+        <div className="relative bg-black w-full aspect-video">
           {!useReactPlayer ? (
             <video
               ref={videoRef}
@@ -252,7 +372,8 @@ export default function TVPlayer({
               playsInline
               preload="auto"
               muted={isMuted}
-              className="w-full h-full"
+              className="w-full h-full object-cover"
+              style={{ objectFit: 'cover' }}
               onPlay={() => {
                 setIsPlaying(true);
                 setLastError(null);
@@ -261,9 +382,11 @@ export default function TVPlayer({
               onLoadedData={() => setLoading(false)}
               onCanPlay={() => setLoading(false)}
               onEnded={() => {
-                // Em live, tenta retomar
                 videoRef.current?.play().catch(() => {});
               }}
+              role="video"
+              aria-label={`Reproduzindo ${channelName}`}
+              tabIndex={0}
             />
           ) : (
             <ReactPlayer
@@ -293,6 +416,7 @@ export default function TVPlayer({
                 setLastError("Falha no fallback ReactPlayer.");
                 onErrorPlayback?.();
               }}
+              style={{ objectFit: 'cover' }}
             />
           )}
 
@@ -303,10 +427,17 @@ export default function TVPlayer({
             </div>
           )}
 
-          {/* Erros */}
+          {/* Erros com Retry */}
           {lastError && (
-            <div className="absolute bottom-16 left-0 right-0 text-center text-red-500 font-bold bg-black/70 p-2">
-              {lastError}
+            <div className="absolute bottom-16 left-0 right-0 text-center text-red-500 font-bold bg-black/70 p-2 flex items-center justify-center gap-2">
+              <span>{lastError}</span>
+              <button
+                onClick={handleRetry}
+                className="bg-blue-500 hover:bg-blue-600 px-3 py-1 rounded text-white text-sm"
+                aria-label="Tentar novamente"
+              >
+                <MdReplay size={16} />
+              </button>
             </div>
           )}
 
@@ -318,7 +449,7 @@ export default function TVPlayer({
           >
             <div className="flex items-center gap-3">
               <img
-                src={channelLogo || "/fallback.png"}
+                src={channelLogo}
                 alt={channelName}
                 className="w-8 h-8 object-contain"
                 onError={(e) => {
@@ -330,7 +461,11 @@ export default function TVPlayer({
                 AO VIVO
               </span>
             </div>
-            <button onClick={handleClose} className="text-white text-2xl">
+            <button
+              onClick={handleClose}
+              className="text-white text-2xl hover:opacity-70"
+              aria-label="Fechar player"
+            >
               <MdClose />
             </button>
           </div>
@@ -342,10 +477,18 @@ export default function TVPlayer({
             }`}
           >
             <div className="flex items-center gap-3">
-              <button onClick={togglePlay} aria-label={isPlaying ? "Pausar" : "Reproduzir"}>
+              <button
+                onClick={togglePlay}
+                aria-label={isPlaying ? "Pausar" : "Reproduzir"}
+                className="hover:opacity-70"
+              >
                 {isPlaying ? <MdPause size={28} /> : <MdPlayArrow size={28} />}
               </button>
-              <button onClick={toggleMute} aria-label={isMuted ? "Ativar som" : "Silenciar"}>
+              <button
+                onClick={toggleMute}
+                aria-label={isMuted ? "Ativar som" : "Silenciar"}
+                className="hover:opacity-70"
+              >
                 {isMuted ? <MdVolumeOff size={24} /> : <MdVolumeUp size={24} />}
               </button>
               <input
@@ -355,11 +498,15 @@ export default function TVPlayer({
                 step={0.01}
                 value={volumeUI}
                 onChange={(e) => handleVolumeChange(Number(e.target.value))}
-                className="w-28 accent-blue-500"
+                className="w-28 accent-blue-500 md:w-32"
                 aria-label="Volume"
               />
             </div>
-            <button onClick={toggleFs} aria-label={isFullscreen ? "Sair de tela cheia" : "Tela cheia"}>
+            <button
+              onClick={toggleFs}
+              aria-label={isFullscreen ? "Sair de tela cheia" : "Tela cheia"}
+              className="hover:opacity-70"
+            >
               {isFullscreen ? <MdFullscreenExit size={24} /> : <MdFullscreen size={24} />}
             </button>
           </div>
