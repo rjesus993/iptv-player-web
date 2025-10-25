@@ -27,20 +27,19 @@ export default function MovieCard({
     >
       <div className="relative">
         <img
-          key={`${vod.stream_id}-${searchKey}-${categoryKey}`}
-          src={posterSrc}
-          alt={vod.name}
-          loading="lazy"
-          className="w-full h-auto object-cover rounded transition-transform group-hover:scale-[1.02]"
-          onError={(e) => {
-            const target = e.currentTarget as HTMLImageElement;
-            // evita loop e garante placeholder
-            if (!target.src.endsWith(fallbackPoster)) {
-              target.src = fallbackPoster;
-            }
-          }}
-          referrerPolicy="no-referrer"
-          decoding="async"
+  key={`${vod.stream_id}-${searchKey}-${categoryKey}`}
+  src={posterSrc}
+  alt={vod.name}
+  onError={(e) => {
+    const target = e.currentTarget as HTMLImageElement;
+    if (!target.src.endsWith(fallbackPoster)) {
+      target.src = fallbackPoster;
+    }
+  }}
+  className="w-full h-auto object-cover rounded transition-transform group-hover:scale-[1.02]"
+  loading="lazy"
+  referrerPolicy="no-referrer"
+  decoding="async"
         />
         <div className="pointer-events-none absolute inset-0 rounded bg-gradient-to-t from-black/40 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
       </div>

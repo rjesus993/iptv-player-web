@@ -325,13 +325,13 @@ export default function VodGrid() {
                         loading="eager"
                         className="w-full md:w-40 lg:w-48 h-auto rounded object-cover"
                         onError={(e) => {
-                          const target = e.currentTarget as HTMLImageElement;
-                          target.src =
-                            vodInfos[selectedVod.stream_id]?.info.cover ||
-                            "/fallback-poster.png";
-                        }}
-                        referrerPolicy="no-referrer"
-                        decoding="async"
+    const target = e.currentTarget as HTMLImageElement;
+    if (!target.src.endsWith("/fallback-poster.png")) {
+      target.src = "/fallback-poster.png"; // garante placeholder definitivo
+    }
+  }}
+  referrerPolicy="no-referrer"
+  decoding="async"
                       />
 
                       <div className="flex-1">
