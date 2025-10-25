@@ -1,32 +1,29 @@
-import { useLogos } from "../hooks/useLogos";
-import LogoImage from "./LogoImage";
+import { useLogo } from "../hooks/useLogo";
+
+interface Channel {
+  id: string;
+  name: string;
+  url: string;
+  logo?: string | null; // tvg-logo do M3U
+}
 
 export default function ChannelCard({
   channel,
   onClick,
-}: {
-  channel: { id: string; name: string; logo?: string };
-  onClick: () => void;
-}) {
-  const { getLogoUrl } = useLogos();
-
-  // Resolve logo uma única vez por render
-  const resolvedLogo =
-    channel.logo && channel.logo.trim() !== ""
-      ? channel.logo
-      : getLogoUrl(channel.name);
+}: { channel: Channel; onClick: () => void }) {
+  const { logoSrc } = useLogo(channel.name, channel.logo || null);
 
   return (
     <div
       onClick={onClick}
-      className="bg-gray-800 rounded-lg p-3 flex flex-col items-center hover:scale-105 hover:bg-gray-700 cursor-pointer transition"
+      className="bg-gray-900 rounded-lg p-3 flex flex-col items-center cursor-pointer hover:bg-gray-800 transition"
     >
-      <LogoImage
-        src={resolvedLogo}
+      <img
+        src={logoSrc}
         alt={channel.name}
-        className="w-full h-20 object-contain"
+        className="w-12 h-12 object-contain mb-2"
       />
-      <p className="mt-2 text-xs text-center text-gray-200">{channel.name}</p>
+      <span className="text-sm text-white text-center">{channel.name}</span>
     </div>
   );
 }

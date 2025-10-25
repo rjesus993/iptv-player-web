@@ -28,9 +28,6 @@ export default function Sidebar({ onSelect }: { onSelect: (section: "tv" | "vod"
         {item("vod", "Filmes", Film)}
         {item("series", "Séries", Clapperboard)}
       </nav>
-      <div className="p-3 text-xs text-gray-500 border-t border-gray-800">
-        UI inspirada em streamingriver/ui
-      </div>
     </aside>
   );
 }
