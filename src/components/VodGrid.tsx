@@ -6,40 +6,52 @@ import {
   Vod,
   VodInfo,
 } from "../features/vod/service";
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, Fragment } from "react";
 import MovieCard from "./MovieCard";
 import VodPlayer from "./VodPlayer";
 import { PlayIcon } from "@heroicons/react/24/solid";
 
 const PAGE_SIZE = 20;
-// Ajuste este valor para corresponder às colunas do seu grid (md, lg).
-// Usaremos a configuração de colunas do layout base (lg:grid-cols-6).
-const COLS = 6;
 
 export default function VodGrid() {
   const auth = useAuthStore();
 
-  // Dados base
+  // Data
   const [vods, setVods] = useState<Vod[]>([]);
   const [vodInfos, setVodInfos] = useState<Record<string, VodInfo>>({});
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
+
+  // UI state
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Estado de UI
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
   const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({});
   const [selectedVod, setSelectedVod] = useState<Vod | null>(null);
   const [expandedPlots, setExpandedPlots] = useState<Record<string, boolean>>({});
   const [playingVod, setPlayingVod] = useState<Vod | null>(null);
 
-  // Filtros e paginação
+  // Filters and pagination
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
   const [page, setPage] = useState(1);
   const loaderRef = useRef<HTMLDivElement | null>(null);
 
-  // Carregar lista de VOD e categorias
+  // Dynamic columns by viewport (sync with grid classes: 2 / 4 / 6)
+  const [cols, setCols] = useState(6);
+  useEffect(() => {
+    const updateCols = () => {
+      const w = window.innerWidth;
+      if (w < 768) setCols(2); // sm: grid-cols-2
+      else if (w < 1024) setCols(4); // md: grid-cols-4
+      else setCols(6); // lg: grid-cols-6
+    };
+    updateCols();
+    window.addEventListener("resize", updateCols);
+    return () => window.removeEventListener("resize", updateCols);
+  }, []);
+
+  // Load VODs and categories
   useEffect(() => {
     if (!auth || auth.type !== "xtream") return;
     setLoading(true);
@@ -67,17 +79,17 @@ export default function VodGrid() {
       .finally(() => setLoading(false));
   }, [auth]);
 
-  // Filtrar por categoria e busca
+  // Filtered list
   const filtered = vods.filter((v) => {
     const matchCategory = category === "all" || v.category_id === category;
     const matchSearch = v.name.toLowerCase().includes(search.toLowerCase());
     return matchCategory && matchSearch;
   });
 
-  // Paginação (infinite scroll)
+  // Pagination slice
   const paginated = filtered.slice(0, page * PAGE_SIZE);
 
-  // Pré-carregar detalhes dos VODs paginados
+  // Preload details for visible items
   useEffect(() => {
     if (!auth) return;
     const fetchDetails = async () => {
@@ -87,7 +99,7 @@ export default function VodGrid() {
             const info = await loadVodInfo(auth, vod.stream_id);
             setVodInfos((prev) => ({ ...prev, [vod.stream_id]: info }));
           } catch {
-            // Silencia erros individuais
+            // ignore individual errors
           }
         }
       }
@@ -95,7 +107,7 @@ export default function VodGrid() {
     fetchDetails();
   }, [auth, paginated, vodInfos]);
 
-  // Observador do infinite scroll
+  // Infinite scroll observer
   const handleObserver = useCallback(
     (entries: IntersectionObserverEntry[]) => {
       const target = entries[0];
@@ -115,8 +127,7 @@ export default function VodGrid() {
     };
   }, [handleObserver]);
 
-  // Clique em um card: define linha expandida, VOD selecionado,
-  // e marca a linha como "já animada" após a primeira abertura
+  // Click card: set selected vod and expanded row; mark first-time animation per row
   const handleExpand = (vod: Vod, rowIndex: number) => {
     setSelectedVod(vod);
     setExpandedRow(rowIndex);
@@ -133,7 +144,7 @@ export default function VodGrid() {
     <div>
       <h2 className="text-xl font-bold mb-4">Filmes e Séries</h2>
 
-      {/* Barra de busca e categorias */}
+      {/* Search and categories */}
       <div className="flex flex-col md:flex-row gap-3 mb-4">
         <input
           type="text"
@@ -161,87 +172,109 @@ export default function VodGrid() {
         </select>
       </div>
 
-      {/* Grid de filmes */}
+      {/* Grid of movies */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
         {paginated.map((vod, index) => {
-          const rowIndex = Math.floor(index / COLS);
+          const rowIndex = Math.floor(index / cols);
+          const isLastInRow = (index + 1) % cols === 0;
 
           return (
-            <div key={`${vod.stream_id}-${index}`}>
-              <MovieCard vod={vod} onClick={() => handleExpand(vod, rowIndex)} />
+            <Fragment key={`${vod.stream_id}-${index}`}>
+              {/* Highlight selected card with ring */}
+              <div
+                className={`relative rounded overflow-hidden ${
+                  selectedVod?.stream_id === vod.stream_id ? "ring-4 ring-blue-500" : ""
+                }`}
+              >
+                <MovieCard vod={vod} onClick={() => handleExpand(vod, rowIndex)} />
+              </div>
 
-              {expandedRow === rowIndex && selectedVod?.stream_id === vod.stream_id && (
+              {/* Full-width expanded panel rendered after the last card of the row */}
+              {isLastInRow && expandedRow === rowIndex && selectedVod && (
                 <div
-                  className={`bg-gray-900 text-white p-4 rounded mt-2 overflow-hidden
-                    ${expandedRows[rowIndex] ? "" : "animate-slideDown"}`}
+                  className={`col-span-full bg-gray-900 text-white p-4 rounded mt-2 overflow-hidden ${
+                    expandedRows[rowIndex] ? "" : "animate-slideDown"
+                  }`}
                 >
-                  <h3 className="text-lg font-bold">{selectedVod.name}</h3>
+                  <div className="flex flex-col md:flex-row gap-4">
+                    {/* Optional poster left */}
+                    {selectedVod.stream_icon && (
+                      <img
+                        src={selectedVod.stream_icon}
+                        alt={selectedVod.name}
+                        className="w-full md:w-40 lg:w-48 h-auto rounded object-cover"
+                      />
+                    )}
 
-                  {vodInfos[selectedVod.stream_id] ? (
-                    <div key={selectedVod.stream_id} className="animate-fadeIn">
-                      {/* Resumo com altura fixa padrão: max-h-24 e overflow-hidden */}
-                      <div
-                        className={`text-sm text-gray-300 mb-2 transition-all duration-300 ${
-                          expandedPlots[selectedVod.stream_id]
-                            ? "max-h-none"
-                            : "max-h-24 overflow-hidden"
-                        }`}
-                      >
-                        {vodInfos[selectedVod.stream_id].info.plot ||
-                          "Sem descrição disponível."}
-                      </div>
-
-                      {/* Botão mostrar mais/menos aparece quando texto potencialmente excede o limite */}
-                      {vodInfos[selectedVod.stream_id].info.plot &&
-                        vodInfos[selectedVod.stream_id].info.plot.length > 200 && (
-                          <button
-                            onClick={() =>
-                              setExpandedPlots((prev) => ({
-                                ...prev,
-                                [selectedVod.stream_id]:
-                                  !prev[selectedVod.stream_id],
-                              }))
-                            }
-                            className="text-blue-400 text-xs hover:underline"
+                    {/* Content */}
+                    <div className="flex-1">
+                      <h3 className="text-lg font-bold">{selectedVod.name}</h3>
+                      {vodInfos[selectedVod.stream_id] ? (
+                        <div key={selectedVod.stream_id} className="animate-fadeIn">
+                          {/* Fixed-height summary area: max-h-24 + overflow-hidden */}
+                          <div
+                            className={`text-sm text-gray-300 mb-2 transition-all duration-300 ${
+                              expandedPlots[selectedVod.stream_id]
+                                ? "max-h-none"
+                                : "max-h-24 overflow-hidden"
+                            }`}
                           >
-                            {expandedPlots[selectedVod.stream_id]
-                              ? "Mostrar menos"
-                              : "Mostrar mais"}
-                          </button>
-                        )}
+                            {vodInfos[selectedVod.stream_id].info.plot ||
+                              "Sem descrição disponível."}
+                          </div>
 
-                      <p className="text-xs text-gray-400 mt-2">
-                        {vodInfos[selectedVod.stream_id].info.releasedate ||
-                          "Data desconhecida"}{" "}
-                        •{" "}
-                        {vodInfos[selectedVod.stream_id].info.duration ||
-                          "Duração desconhecida"}{" "}
-                        • ⭐{" "}
-                        {vodInfos[selectedVod.stream_id].info.rating || "N/A"}
-                      </p>
+                          {/* Show button only if likely exceeds standard height */}
+                          {vodInfos[selectedVod.stream_id].info.plot &&
+                            vodInfos[selectedVod.stream_id].info.plot.length > 200 && (
+                              <button
+                                onClick={() =>
+                                  setExpandedPlots((prev) => ({
+                                    ...prev,
+                                    [selectedVod.stream_id]: !prev[selectedVod.stream_id],
+                                  }))
+                                }
+                                className="text-blue-400 text-xs hover:underline"
+                              >
+                                {expandedPlots[selectedVod.stream_id]
+                                  ? "Mostrar menos"
+                                  : "Mostrar mais"}
+                              </button>
+                            )}
+
+                          <p className="text-xs text-gray-400 mt-2">
+                            {vodInfos[selectedVod.stream_id].info.releasedate ||
+                              "Data desconhecida"}{" "}
+                            •{" "}
+                            {vodInfos[selectedVod.stream_id].info.duration ||
+                              "Duração desconhecida"}{" "}
+                            • ⭐{" "}
+                            {vodInfos[selectedVod.stream_id].info.rating || "N/A"}
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-400">Carregando detalhes...</p>
+                      )}
+
+                      <button
+                        onClick={() => setPlayingVod(selectedVod)}
+                        className="mt-3 flex items-center gap-2 bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded"
+                      >
+                        <PlayIcon className="w-5 h-5 text-white" />
+                        Play
+                      </button>
                     </div>
-                  ) : (
-                    <p className="text-sm text-gray-400">Carregando detalhes...</p>
-                  )}
-
-                  <button
-                    onClick={() => setPlayingVod(selectedVod)}
-                    className="mt-3 flex items-center gap-2 bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded"
-                  >
-                    <PlayIcon className="w-5 h-5 text-white" />
-                    Play
-                  </button>
+                  </div>
                 </div>
               )}
-            </div>
+            </Fragment>
           );
         })}
       </div>
 
-      {/* Loader para infinite scroll */}
+      {/* Infinite scroll loader */}
       <div ref={loaderRef} className="h-10"></div>
 
-      {/* Player */}
+      {/* Player modal */}
       {playingVod && selectedVod && (
         <VodPlayer
           url={`${auth.host}/movie/${auth.username}/${auth.password}/${playingVod.stream_id}.${playingVod.container_extension || "mp4"}`}
