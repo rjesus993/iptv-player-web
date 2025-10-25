@@ -11,8 +11,9 @@ import MovieCard from "./MovieCard";
 import VodPlayer from "./VodPlayer";
 import { PlayIcon } from "@heroicons/react/24/solid";
 
-const PAGE_SIZE = 20;
-const PRELOAD_TIMEOUT_MS = 800; // pequeno delay para garantir preload de infos e imagens antes de mostrar os cards
+const PAGE_SIZE = 40; // mais itens por página (subida e descida)
+const PRELOAD_TIMEOUT_MS = 800; // delay para garantir preload de infos e imagens
+const SEARCH_PRELOAD_TIMEOUT_MS = 600; // delay leve ao buscar para garantir infos carregadas antes de exibir
 
 export default function VodGrid() {
   const auth = useAuthStore();
@@ -32,14 +33,21 @@ export default function VodGrid() {
   const [showMoreAvailable, setShowMoreAvailable] = useState<Record<string, boolean>>({});
   const [playingVod, setPlayingVod] = useState<Vod | null>(null);
 
-  // Filtros e paginação
+  // Filtros
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
 
-  // Paginação com preload controlado
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE); // quantos itens de fato aparecem
-  const [preloadingPage, setPreloadingPage] = useState(false);
-  const loaderRef = useRef<HTMLDivElement | null>(null);
+  // Paginação bidirecional (janela visível)
+  const [startIndex, setStartIndex] = useState(0);
+  const [endIndex, setEndIndex] = useState(PAGE_SIZE);
+  const [preloading, setPreloading] = useState(false);
+
+  // Estado para preload ao buscar
+  const [searchPreloading, setSearchPreloading] = useState(false);
+
+  // Loaders de rolagem
+  const topLoaderRef = useRef<HTMLDivElement | null>(null);
+  const bottomLoaderRef = useRef<HTMLDivElement | null>(null);
 
   // Colunas dinâmicas por breakpoint
   const [cols, setCols] = useState(6);
@@ -83,16 +91,6 @@ export default function VodGrid() {
       .finally(() => setLoading(false));
   }, [auth]);
 
-  // Fechar painel expandido ao mudar busca ou categoria
-  useEffect(() => {
-    setExpandedRow(null);
-    setSelectedVod(null);
-    setExpandedPlots({});
-    setShowMoreAvailable({});
-    // reset de paginação visível ao mudar filtros
-    setVisibleCount(PAGE_SIZE);
-  }, [search, category]);
-
   // Filtrar
   const filtered = vods.filter((v) => {
     const matchCategory = category === "all" || v.category_id === category;
@@ -100,10 +98,20 @@ export default function VodGrid() {
     return matchCategory && matchSearch;
   });
 
-  // Lista visível com base em visibleCount
-  const visibleList = filtered.slice(0, visibleCount);
+  // Janela visível
+  const visibleList = filtered.slice(startIndex, endIndex);
 
-  // Pré-carregar detalhes dos visíveis (em lote e também para próximos itens antes de renderizar)
+  // Reset ao mudar filtros + janela e fechar painel
+  useEffect(() => {
+    setExpandedRow(null);
+    setSelectedVod(null);
+    setExpandedPlots({});
+    setShowMoreAvailable({});
+    setStartIndex(0);
+    setEndIndex(PAGE_SIZE);
+  }, [search, category]);
+
+  // Preload de infos dos VOD
   const preloadVodInfo = async (items: Vod[]) => {
     if (!auth) return;
     const tasks = items.map(async (vod) => {
@@ -119,7 +127,7 @@ export default function VodGrid() {
     await Promise.allSettled(tasks);
   };
 
-  // Pré-carregar imagens (capas) para evitar PNG quebrado por excesso de concorrência
+  // Preload de imagens (capas)
   const preloadImages = async (items: Vod[]) => {
     const tasks = items
       .filter((v) => !!v.stream_icon)
@@ -127,58 +135,87 @@ export default function VodGrid() {
         (v) =>
           new Promise<void>((resolve) => {
             const img = new Image();
-            img.loading = "eager"; // força o preload
+            img.loading = "eager";
             img.decoding = "async";
-            img.referrerPolicy = "no-referrer";
             img.src = v.stream_icon!;
             img.onload = () => resolve();
-            img.onerror = () => resolve(); // segue mesmo em erro, para não travar paginação
+            img.onerror = () => resolve(); // não trava a paginação
           })
       );
     await Promise.allSettled(tasks);
   };
 
-  // Pré-carregar infos e imagens para o próximo lote antes de aumentar o visibleCount
-  const preloadNextPage = useCallback(async () => {
-    if (preloadingPage) return;
-    if (visibleCount >= filtered.length) return;
+  // Preload para um range antes de atualizar a janela
+  const preloadRange = useCallback(
+    async (newStart: number, newEnd: number) => {
+      if (preloading) return;
+      setPreloading(true);
 
-    setPreloadingPage(true);
+      const slice = filtered.slice(newStart, newEnd);
+      const delay = new Promise((r) => setTimeout(r, PRELOAD_TIMEOUT_MS));
 
-    const nextCount = Math.min(visibleCount + PAGE_SIZE, filtered.length);
-    const nextSlice = filtered.slice(visibleCount, nextCount);
+      await Promise.all([preloadVodInfo(slice), preloadImages(slice), delay]);
 
-    // Executa preload com um pequeno delay de segurança
-    const delay = new Promise((r) => setTimeout(r, PRELOAD_TIMEOUT_MS));
-    await Promise.all([
-      preloadVodInfo(nextSlice),
-      preloadImages(nextSlice),
-      delay,
-    ]);
+      setStartIndex(newStart);
+      setEndIndex(newEnd);
+      setPreloading(false);
+    },
+    [filtered, preloading]
+  );
 
-    setVisibleCount(nextCount);
-    setPreloadingPage(false);
-  }, [filtered, visibleCount, preloadingPage]);
+  // Preload dedicado para busca (garante infos antes de exibir os primeiros resultados)
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      setSearchPreloading(true);
+      const initialSlice = filtered.slice(0, PAGE_SIZE);
+      const delay = new Promise((r) => setTimeout(r, SEARCH_PRELOAD_TIMEOUT_MS));
+      await Promise.all([preloadVodInfo(initialSlice), preloadImages(initialSlice), delay]);
+      if (!cancelled) setSearchPreloading(false);
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+    // só quando os filtros mudam
+  }, [search, category, vods.length]);
 
-  // Observer para infinite scroll com paginação controlada
-  const handleObserver = useCallback(
+  // Observers para baixo e para cima
+  const handleBottomObserver = useCallback(
     (entries: IntersectionObserverEntry[]) => {
       const target = entries[0];
-      if (target.isIntersecting && !preloadingPage) {
-        preloadNextPage();
+      if (target.isIntersecting && endIndex < filtered.length) {
+        const newEnd = Math.min(endIndex + PAGE_SIZE, filtered.length);
+        preloadRange(startIndex, newEnd);
       }
     },
-    [preloadingPage, preloadNextPage]
+    [endIndex, filtered.length, preloadRange, startIndex]
+  );
+
+  const handleTopObserver = useCallback(
+    (entries: IntersectionObserverEntry[]) => {
+      const target = entries[0];
+      if (target.isIntersecting && startIndex > 0) {
+        const newStart = Math.max(0, startIndex - PAGE_SIZE);
+        preloadRange(newStart, endIndex);
+      }
+    },
+    [startIndex, preloadRange, endIndex]
   );
 
   useEffect(() => {
     const option = { root: null, rootMargin: "20px", threshold: 1.0 };
-    const observer = new IntersectionObserver(handleObserver, option);
-    if (loaderRef.current) observer.observe(loaderRef.current);
+    const bottomObserver = new IntersectionObserver(handleBottomObserver, option);
+    const topObserver = new IntersectionObserver(handleTopObserver, option);
+
+    if (bottomLoaderRef.current) bottomObserver.observe(bottomLoaderRef.current);
+    if (topLoaderRef.current) topObserver.observe(topLoaderRef.current);
+
     return () => {
-      if (loaderRef.current) observer.unobserve(loaderRef.current);
+      if (bottomLoaderRef.current) bottomObserver.unobserve(bottomLoaderRef.current);
+      if (topLoaderRef.current) topObserver.unobserve(topLoaderRef.current);
     };
-  }, [handleObserver]);
+  }, [handleBottomObserver, handleTopObserver]);
 
   // Expandir card
   const handleExpand = (vod: Vod, rowIndex: number) => {
@@ -255,18 +292,12 @@ export default function VodGrid() {
           type="text"
           placeholder="Buscar VOD..."
           value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setVisibleCount(PAGE_SIZE);
-          }}
+          onChange={(e) => setSearch(e.target.value)}
           className="flex-1 px-3 py-2 rounded bg-gray-800 text-white focus:outline-none focus:ring focus:ring-blue-500"
         />
         <select
           value={category}
-          onChange={(e) => {
-            setCategory(e.target.value);
-            setVisibleCount(PAGE_SIZE);
-          }}
+          onChange={(e) => setCategory(e.target.value)}
           className="px-3 py-2 rounded bg-gray-800 text-white focus:outline-none focus:ring focus:ring-blue-500"
         >
           {categories.map((cat, index) => (
@@ -277,16 +308,22 @@ export default function VodGrid() {
         </select>
       </div>
 
-      {/* Grid */}
+      {/* Loader superior (para rolagem para cima) */}
+      <div ref={topLoaderRef} className="h-6 flex items-center justify-center">
+        {preloading && <span className="text-xs text-gray-400">Carregando...</span>}
+      </div>
+
+      {/* Grid com estado de preload de busca: exibe spinner overlay nos cards até infos carregarem */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
         {visibleList.map((vod, index) => {
           const rowIndex = Math.floor(index / cols);
           const isLastInRow = (index + 1) % cols === 0;
           const isLastItem = index === visibleList.length - 1;
+          const infoLoaded = !!vodInfos[vod.stream_id];
 
           return (
-            <Fragment key={`${vod.stream_id}-${index}`}>
-              {/* Card com glow animado no selecionado */}
+            <Fragment key={`${vod.stream_id}-${startIndex + index}`}>
+              {/* Card com glow animado no selecionado + overlay de loading quando em busca/preload */}
               <div
                 className={`relative rounded overflow-hidden transition-all ${
                   selectedVod?.stream_id === vod.stream_id
@@ -294,7 +331,15 @@ export default function VodGrid() {
                     : ""
                 }`}
               >
-                <MovieCard vod={vod} onClick={() => handleExpand(vod, rowIndex)} />
+                <MovieCard
+                  vod={vod}
+                  onClick={() => handleExpand(vod, rowIndex)}
+                />
+                {searchPreloading && !infoLoaded && (
+                  <div className="absolute inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center">
+                    <div className="h-5 w-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                )}
               </div>
 
               {/* Painel expandido ocupa a linha inteira; inclui correção da última linha */}
@@ -307,7 +352,7 @@ export default function VodGrid() {
                     }`}
                   >
                     <div className="flex flex-col md:flex-row gap-4">
-                      {/* Poster opcional à esquerda com fallback */}
+                      {/* Poster à esquerda com fallback */}
                       {selectedVod.stream_icon && (
                         <img
                           src={selectedVod.stream_icon}
@@ -330,7 +375,7 @@ export default function VodGrid() {
 
                         {vodInfos[selectedVod.stream_id] ? (
                           <div key={selectedVod.stream_id} className="animate-fadeIn">
-                            {/* Resumo com altura fixa padrão: max-h-24 + overflow-hidden */}
+                            {/* Resumo com altura fixa padrão */}
                             <div
                               ref={(el) => (plotRefs.current[selectedVod.stream_id] = el)}
                               className={`text-sm text-gray-300 mb-2 transition-all duration-300 ${
@@ -343,7 +388,7 @@ export default function VodGrid() {
                                 "Sem descrição disponível."}
                             </div>
 
-                            {/* Mostrar mais baseado na altura real */}
+                            {/* Mostrar mais com base na altura real */}
                             {showMoreAvailable[selectedVod.stream_id] && (
                               <button
                                 onClick={() => togglePlot(selectedVod.stream_id)}
@@ -387,10 +432,10 @@ export default function VodGrid() {
         })}
       </div>
 
-      {/* Loader / Preloading indicador */}
-      <div ref={loaderRef} className="h-10 flex items-center justify-center">
-        {preloadingPage && (
-          <span className="text-xs text-gray-400">Carregando mais itens...</span>
+      {/* Loader inferior (rolagem para baixo) */}
+      <div ref={bottomLoaderRef} className="h-8 flex items-center justify-center">
+        {(preloading || searchPreloading) && (
+          <span className="text-xs text-gray-400">Carregando...</span>
         )}
       </div>
 
