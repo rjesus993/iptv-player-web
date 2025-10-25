@@ -8,6 +8,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@heroicons/react": "^2.2.0",
     "@iptv/playlist": "^1.2.1",
     "@iptv/xtream-api": "^1.4.1",
     "focus-trap-react": "^11.0.4",
@@ -24,6 +25,7 @@
     "zustand": "^5.0.8"
   },
   "devDependencies": {
+    "@tailwindcss/line-clamp": "^0.4.4",
     "@types/xml2js": "^0.4.14",
     "@vitejs/plugin-react": "^4.2.0",
     "autoprefixer": "^10.4.21",

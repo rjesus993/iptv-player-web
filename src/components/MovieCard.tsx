@@ -1,19 +1,34 @@
-export default function MovieCard({ item, onClick }: { item: any; onClick: () => void }) {
+import React from "react";
+import { Vod } from "../features/vod/service";
+
+interface MovieCardProps {
+  vod: Vod;
+  onClick: () => void;
+}
+
+const MovieCard: React.FC<MovieCardProps> = ({ vod, onClick }) => {
   return (
     <div
       onClick={onClick}
-      className="relative rounded-lg overflow-hidden shadow-lg hover:scale-105 transition cursor-pointer"
+      className="cursor-pointer bg-gray-800 rounded overflow-hidden shadow hover:scale-105 transition-transform duration-200"
     >
-      {item.logo ? (
-        <img src={item.logo} alt={item.name} className="w-full h-64 object-cover" />
+      {vod.stream_icon ? (
+        <img
+          src={vod.stream_icon}
+          alt={vod.name}
+          loading="lazy" // 🔑 lazy loading nativo do navegador
+          className="w-full h-48 object-cover"
+        />
       ) : (
-        <div className="w-full h-64 flex items-center justify-center bg-gray-700 text-gray-400">
-          Sem capa
+        <div className="w-full h-48 bg-gray-700 flex items-center justify-center text-gray-400">
+          Sem imagem
         </div>
       )}
-      <div className="absolute bottom-0 w-full bg-gradient-to-t from-black/80 to-transparent p-2 text-white text-sm font-medium">
-        {item.name}
+      <div className="p-2">
+        <h4 className="text-sm font-semibold text-white truncate">{vod.name}</h4>
       </div>
     </div>
   );
-}
+};
+
+export default MovieCard;

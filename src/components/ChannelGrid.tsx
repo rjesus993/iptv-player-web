@@ -5,7 +5,7 @@ import {
   Channel,
 } from "../features/channels/service";
 import { useEffect, useState } from "react";
-import Player from "./Player";
+import ChannelPlayer from "./ChannelPlayer";   // ✅ alterado
 import ChannelCard from "./ChannelCard";
 
 export default function ChannelGrid() {
@@ -22,9 +22,7 @@ export default function ChannelGrid() {
   // Marca canal como OFFLINE quando o Player reporta erro
   function markChannelOffline(channelId: string) {
     setChannels((prev) =>
-      prev.map((c) =>
-        c.id === channelId ? { ...c, alive: false } : c
-      )
+      prev.map((c) => (c.id === channelId ? { ...c, alive: false } : c))
     );
   }
 
@@ -60,17 +58,14 @@ export default function ChannelGrid() {
 
   useEffect(() => {
     let list = channels;
-
     if (category !== "all") {
       list = list.filter((c) => c.category_id === category);
     }
-
     if (search.trim() !== "") {
       list = list.filter((c) =>
         c.name.toLowerCase().includes(search.toLowerCase())
       );
     }
-
     setFiltered(list);
   }, [search, category, channels]);
 
@@ -89,7 +84,6 @@ export default function ChannelGrid() {
           onChange={(e) => setSearch(e.target.value)}
           className="flex-1 px-3 py-2 rounded bg-gray-800 text-white focus:outline-none focus:ring focus:ring-blue-500"
         />
-
         <select
           value={category}
           onChange={(e) => setCategory(e.target.value)}
@@ -106,10 +100,7 @@ export default function ChannelGrid() {
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
         {filtered.map((ch) => (
           <div key={ch.id} className="relative">
-            <ChannelCard
-              channel={ch}
-              onClick={() => setCurrentChannel(ch)}
-            />
+            <ChannelCard channel={ch} onClick={() => setCurrentChannel(ch)} />
             {ch.alive === false && (
               <span className="absolute top-1 right-1 bg-red-600 text-white text-xs px-2 py-0.5 rounded">
                 OFFLINE
@@ -120,12 +111,12 @@ export default function ChannelGrid() {
       </div>
 
       {currentChannel && (
-        <Player
+        <ChannelPlayer
           url={currentChannel.url}
           channelName={currentChannel.name}
           channelLogo={currentChannel.logo}
           onClose={() => setCurrentChannel(null)}
-          onErrorPlayback={() => markChannelOffline(currentChannel.id)} // integração
+          onErrorPlayback={() => markChannelOffline(currentChannel.id)}
         />
       )}
     </div>
