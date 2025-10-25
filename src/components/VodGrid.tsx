@@ -11,17 +11,17 @@ import MovieCard from "./MovieCard";
 import VodPlayer from "./VodPlayer";
 import { PlayIcon } from "@heroicons/react/24/solid";
 
-const PAGE_SIZE = 40; // janela maior por página (subida e descida)
-const PRELOAD_TIMEOUT_MS = 800; // delay para garantir preload de infos/imagens
-const SEARCH_PRELOAD_TIMEOUT_MS = 600; // delay para garantir preload na busca
+const PAGE_SIZE = 40;
+const PRELOAD_TIMEOUT_MS = 800;
+const SEARCH_PRELOAD_TIMEOUT_MS = 600;
 
 // Normaliza texto: minúsculas, sem acentos e sem caracteres especiais
 const normalizeText = (text: string) => {
   return text
     .toLowerCase()
-    .normalize("NFD") // separa acentos
-    .replace(/[\u0300-\u036f]/g, "") // remove acentos
-    .replace(/[^a-z0-9]/g, ""); // remove tudo que não for letra/número (hífens, espaços, etc.)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/g, "");
 };
 
 export default function VodGrid() {
@@ -50,8 +50,6 @@ export default function VodGrid() {
   const [startIndex, setStartIndex] = useState(0);
   const [endIndex, setEndIndex] = useState(PAGE_SIZE);
   const [preloading, setPreloading] = useState(false);
-
-  // Estado para preload ao buscar
   const [searchPreloading, setSearchPreloading] = useState(false);
 
   // Loaders de rolagem
@@ -113,8 +111,7 @@ export default function VodGrid() {
   // Filtrar com normalização para ignorar hífens, acentos e caracteres especiais
   const filtered = vods.filter((v) => {
     const matchCategory = category === "all" || v.category_id === category;
-    const matchSearch =
-      normalizeText(v.name).includes(normalizeText(search));
+    const matchSearch = normalizeText(v.name).includes(normalizeText(search));
     return matchCategory && matchSearch;
   });
 
@@ -188,6 +185,18 @@ export default function VodGrid() {
       cancelled = true;
     };
   }, [search, category, vods.length]);
+
+  // 🔥 Fallback: garante que todos os itens visíveis tenham infos carregadas
+  useEffect(() => {
+    if (!auth) return;
+    const fetchDetails = async () => {
+      const missing = visibleList.filter((v) => !vodInfos[v.stream_id]);
+      if (missing.length > 0) {
+        await preloadVodInfo(missing);
+      }
+    };
+    fetchDetails();
+  }, [auth, visibleList, vodInfos]);
 
   // Observers para baixo e para cima
   const handleBottomObserver = useCallback(
