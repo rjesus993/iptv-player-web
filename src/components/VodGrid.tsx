@@ -11,9 +11,18 @@ import MovieCard from "./MovieCard";
 import VodPlayer from "./VodPlayer";
 import { PlayIcon } from "@heroicons/react/24/solid";
 
-const PAGE_SIZE = 40; // mais itens por página (subida e descida)
-const PRELOAD_TIMEOUT_MS = 800; // delay para garantir preload de infos e imagens
-const SEARCH_PRELOAD_TIMEOUT_MS = 600; // delay leve ao buscar para garantir infos carregadas antes de exibir
+const PAGE_SIZE = 40; // janela maior por página (subida e descida)
+const PRELOAD_TIMEOUT_MS = 800; // delay para garantir preload de infos/imagens
+const SEARCH_PRELOAD_TIMEOUT_MS = 600; // delay para garantir preload na busca
+
+// Normaliza texto: minúsculas, sem acentos e sem caracteres especiais
+const normalizeText = (text: string) => {
+  return text
+    .toLowerCase()
+    .normalize("NFD") // separa acentos
+    .replace(/[\u0300-\u036f]/g, "") // remove acentos
+    .replace(/[^a-z0-9]/g, ""); // remove tudo que não for letra/número (hífens, espaços, etc.)
+};
 
 export default function VodGrid() {
   const auth = useAuthStore();
@@ -91,17 +100,7 @@ export default function VodGrid() {
       .finally(() => setLoading(false));
   }, [auth]);
 
-  // Filtrar
-  const filtered = vods.filter((v) => {
-    const matchCategory = category === "all" || v.category_id === category;
-    const matchSearch = v.name.toLowerCase().includes(search.toLowerCase());
-    return matchCategory && matchSearch;
-  });
-
-  // Janela visível
-  const visibleList = filtered.slice(startIndex, endIndex);
-
-  // Reset ao mudar filtros + janela e fechar painel
+  // Reset ao mudar filtros
   useEffect(() => {
     setExpandedRow(null);
     setSelectedVod(null);
@@ -110,6 +109,17 @@ export default function VodGrid() {
     setStartIndex(0);
     setEndIndex(PAGE_SIZE);
   }, [search, category]);
+
+  // Filtrar com normalização para ignorar hífens, acentos e caracteres especiais
+  const filtered = vods.filter((v) => {
+    const matchCategory = category === "all" || v.category_id === category;
+    const matchSearch =
+      normalizeText(v.name).includes(normalizeText(search));
+    return matchCategory && matchSearch;
+  });
+
+  // Janela visível
+  const visibleList = filtered.slice(startIndex, endIndex);
 
   // Preload de infos dos VOD
   const preloadVodInfo = async (items: Vod[]) => {
@@ -145,7 +155,7 @@ export default function VodGrid() {
     await Promise.allSettled(tasks);
   };
 
-  // Preload para um range antes de atualizar a janela
+  // Preload para um range antes de atualizar a janela (para baixo e para cima)
   const preloadRange = useCallback(
     async (newStart: number, newEnd: number) => {
       if (preloading) return;
@@ -177,7 +187,6 @@ export default function VodGrid() {
     return () => {
       cancelled = true;
     };
-    // só quando os filtros mudam
   }, [search, category, vods.length]);
 
   // Observers para baixo e para cima
@@ -308,12 +317,12 @@ export default function VodGrid() {
         </select>
       </div>
 
-      {/* Loader superior (para rolagem para cima) */}
+      {/* Loader superior (rolagem para cima) */}
       <div ref={topLoaderRef} className="h-6 flex items-center justify-center">
         {preloading && <span className="text-xs text-gray-400">Carregando...</span>}
       </div>
 
-      {/* Grid com estado de preload de busca: exibe spinner overlay nos cards até infos carregarem */}
+      {/* Grid com overlay de preload durante busca */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
         {visibleList.map((vod, index) => {
           const rowIndex = Math.floor(index / cols);
@@ -323,7 +332,7 @@ export default function VodGrid() {
 
           return (
             <Fragment key={`${vod.stream_id}-${startIndex + index}`}>
-              {/* Card com glow animado no selecionado + overlay de loading quando em busca/preload */}
+              {/* Card com glow animado no selecionado + spinner quando em preload de busca */}
               <div
                 className={`relative rounded overflow-hidden transition-all ${
                   selectedVod?.stream_id === vod.stream_id
@@ -331,10 +340,7 @@ export default function VodGrid() {
                     : ""
                 }`}
               >
-                <MovieCard
-                  vod={vod}
-                  onClick={() => handleExpand(vod, rowIndex)}
-                />
+                <MovieCard vod={vod} onClick={() => handleExpand(vod, rowIndex)} />
                 {searchPreloading && !infoLoaded && (
                   <div className="absolute inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center">
                     <div className="h-5 w-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
