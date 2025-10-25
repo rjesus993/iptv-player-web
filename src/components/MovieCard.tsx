@@ -1,34 +1,53 @@
 import React from "react";
 import { Vod } from "../features/vod/service";
 
-interface MovieCardProps {
+type Props = {
   vod: Vod;
-  onClick: () => void;
-}
-
-const MovieCard: React.FC<MovieCardProps> = ({ vod, onClick }) => {
-  return (
-    <div
-      onClick={onClick}
-      className="cursor-pointer bg-gray-800 rounded overflow-hidden shadow hover:scale-105 transition-transform duration-200"
-    >
-      {vod.stream_icon ? (
-        <img
-          src={vod.stream_icon}
-          alt={vod.name}
-          loading="lazy" // 🔑 lazy loading nativo do navegador
-          className="w-full h-48 object-cover"
-        />
-      ) : (
-        <div className="w-full h-48 bg-gray-700 flex items-center justify-center text-gray-400">
-          Sem imagem
-        </div>
-      )}
-      <div className="p-2">
-        <h4 className="text-sm font-semibold text-white truncate">{vod.name}</h4>
-      </div>
-    </div>
-  );
+  onClick?: () => void;
+  searchKey?: string;
+  categoryKey?: string;
+  fallbackPoster?: string;
 };
 
-export default MovieCard;
+export default function MovieCard({
+  vod,
+  onClick,
+  searchKey = "",
+  categoryKey = "",
+  fallbackPoster = "/fallback-poster.png",
+}: Props) {
+  const posterSrc = vod.stream_icon || fallbackPoster;
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group w-full text-left"
+      aria-label={`Abrir detalhes de ${vod.name}`}
+    >
+      <div className="relative">
+        <img
+          key={`${vod.stream_id}-${searchKey}-${categoryKey}`}
+          src={posterSrc}
+          alt={vod.name}
+          loading="lazy"
+          className="w-full h-auto object-cover rounded transition-transform group-hover:scale-[1.02]"
+          onError={(e) => {
+            const target = e.currentTarget as HTMLImageElement;
+            // evita loop e garante placeholder
+            if (!target.src.endsWith(fallbackPoster)) {
+              target.src = fallbackPoster;
+            }
+          }}
+          referrerPolicy="no-referrer"
+          decoding="async"
+        />
+        <div className="pointer-events-none absolute inset-0 rounded bg-gradient-to-t from-black/40 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+      </div>
+
+      <div className="mt-2">
+        <p className="text-sm font-semibold text-white line-clamp-2">{vod.name}</p>
+      </div>
+    </button>
+  );
+}
