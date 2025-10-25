@@ -20,12 +20,20 @@ interface TVPlayerProps {
   onErrorPlayback?: () => void;
 }
 
+// Encapsula URLs externas no proxy da própria aplicação
+function getProxiedUrl(url: string) {
+  if (!url) return url;
+  if (url.startsWith("/api/proxy")) return url;
+  // Só proxia se for http(s)
+  const isExternal = /^https?:\/\//i.test(url);
+  return isExternal ? `/api/proxy?url=${encodeURIComponent(url)}` : url;
+}
+
 export default function TVPlayer({
   url,
   channelName,
   channelLogo = "/fallback.png",
   onClose,
-  onErrorPlayback,
 }: TVPlayerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -42,7 +50,6 @@ export default function TVPlayer({
 
   const inactivityTimer = useRef<NodeJS.Timeout | null>(null);
 
-  // 🔹 Função para resetar timer de inatividade
   function resetInactivityTimer() {
     setShowUI(true);
     if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
@@ -53,19 +60,26 @@ export default function TVPlayer({
 
   const cleanupPlayer = useCallback(() => {
     if (hlsRef.current) {
-      try { hlsRef.current.destroy(); } catch {}
+      try {
+        hlsRef.current.destroy();
+      } catch {}
       hlsRef.current = null;
     }
     if (shakaRef.current) {
-      try { shakaRef.current.destroy(); } catch {}
+      try {
+        shakaRef.current.destroy();
+      } catch {}
       shakaRef.current = null;
     }
     const v = videoRef.current;
     if (v) {
-      v.pause();
-      v.src = "";
+      try {
+        v.pause();
+      } catch {}
       v.removeAttribute("src");
-      v.load();
+      try {
+        v.load();
+      } catch {}
     }
   }, []);
 
@@ -77,15 +91,17 @@ export default function TVPlayer({
     setUseReactPlayer(false);
     cleanupPlayer();
 
-    const isHls = url.toLowerCase().endsWith(".m3u8");
-    const isDash = url.toLowerCase().endsWith(".mpd");
+    const finalUrl = getProxiedUrl(url);
+    const isHls = finalUrl.toLowerCase().includes(".m3u8");
+    const isDash = finalUrl.toLowerCase().includes(".mpd");
 
+    // HLS primeiro com Hls.js; se falhar, fallback para ReactPlayer
     if (isHls && Hls.isSupported()) {
       const hls = new Hls();
       hlsRef.current = hls;
       hls.attachMedia(v);
       hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-        hls.loadSource(url);
+        hls.loadSource(finalUrl);
       });
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         v.muted = isMuted;
@@ -93,7 +109,8 @@ export default function TVPlayer({
         v.play().catch(() => setUseReactPlayer(true));
         setLoading(false);
       });
-      hls.on(Hls.Events.ERROR, () => {
+      hls.on(Hls.Events.ERROR, (_evt, data) => {
+        console.error("HLS error:", data);
         cleanupPlayer();
         setUseReactPlayer(true);
         setLoading(false);
@@ -101,23 +118,29 @@ export default function TVPlayer({
     } else if (isDash) {
       const player = new shaka.Player(v);
       shakaRef.current = player;
-      player.load(url).then(() => {
-        v.muted = isMuted;
-        v.volume = volumeUI;
-        v.play().catch(() => setUseReactPlayer(true));
-        setLoading(false);
-      }).catch(() => {
-        cleanupPlayer();
-        setUseReactPlayer(true);
-        setLoading(false);
-      });
+      player
+        .load(finalUrl)
+        .then(() => {
+          v.muted = isMuted;
+          v.volume = volumeUI;
+          v.play().catch(() => setUseReactPlayer(true));
+          setLoading(false);
+        })
+        .catch((err) => {
+          console.error("Shaka error:", err);
+          cleanupPlayer();
+          setUseReactPlayer(true);
+          setLoading(false);
+        });
     } else {
+      // mp4/webm/ogg ou desconhecido → ReactPlayer
       setUseReactPlayer(true);
       setLoading(false);
     }
 
     return () => cleanupPlayer();
-  }, [url, cleanupPlayer]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url]);
 
   useEffect(() => {
     if (useReactPlayer) return;
@@ -127,18 +150,21 @@ export default function TVPlayer({
     v.volume = volumeUI;
   }, [isMuted, volumeUI, useReactPlayer]);
 
-  // 🔹 Ativar listeners de mouse para auto-hide
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const handleMouseMove = () => resetInactivityTimer();
-    container.addEventListener("mousemove", handleMouseMove);
+    const handleMouseLeave = () => setShowUI(false);
 
-    resetInactivityTimer(); // inicia timer
+    container.addEventListener("mousemove", handleMouseMove);
+    container.addEventListener("mouseleave", handleMouseLeave);
+
+    resetInactivityTimer();
 
     return () => {
       container.removeEventListener("mousemove", handleMouseMove);
+      container.removeEventListener("mouseleave", handleMouseLeave);
       if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
     };
   }, []);
@@ -198,7 +224,7 @@ export default function TVPlayer({
         ref={containerRef}
         className="relative z-50 w-full max-w-6xl h-auto bg-black rounded-lg overflow-hidden"
       >
-        <div className="relative bg-black w-full aspect-video">
+        <div className="relative bg-black w-full aspect-video select-none">
           {!useReactPlayer ? (
             <video
               ref={videoRef}
@@ -209,7 +235,7 @@ export default function TVPlayer({
             />
           ) : (
             <ReactPlayer
-              url={url}
+              url={getProxiedUrl(url)}
               playing={isPlaying}
               muted={isMuted}
               volume={volumeUI}
@@ -237,10 +263,10 @@ export default function TVPlayer({
             }`}
           >
             <button onClick={togglePlay} className="text-white">
-              {isPlaying ? <MdPause size={24}/> : <MdPlayArrow size={24}/>}
+              {isPlaying ? <MdPause size={24} /> : <MdPlayArrow size={24} />}
             </button>
             <button onClick={toggleMute} className="text-white">
-              {isMuted ? <MdVolumeOff size={24}/> : <MdVolumeUp size={24}/>}
+              {isMuted ? <MdVolumeOff size={24} /> : <MdVolumeUp size={24} />}
             </button>
             <input
               type="range"
@@ -252,10 +278,14 @@ export default function TVPlayer({
               className="w-24"
             />
             <button onClick={toggleFs} className="ml-auto text-white">
-              {isFullscreen ? <MdFullscreenExit size={24}/> : <MdFullscreen size={24}/>}
+              {isFullscreen ? (
+                <MdFullscreenExit size={24} />
+              ) : (
+                <MdFullscreen size={24} />
+              )}
             </button>
             <button onClick={handleClose} className="text-white">
-              <MdClose size={24}/>
+              <MdClose size={24} />
             </button>
           </div>
 
