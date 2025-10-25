@@ -37,7 +37,7 @@ export default function VodGrid() {
   const [page, setPage] = useState(1);
   const loaderRef = useRef<HTMLDivElement | null>(null);
 
-  // Colunas dinâmicas por breakpoint (sincronizado com grid: 2 / 4 / 6)
+  // Colunas dinâmicas por breakpoint (2 / 4 / 6)
   const [cols, setCols] = useState(6);
   useEffect(() => {
     const updateCols = () => {
@@ -50,6 +50,12 @@ export default function VodGrid() {
     window.addEventListener("resize", updateCols);
     return () => window.removeEventListener("resize", updateCols);
   }, []);
+
+  // Fechar painel expandido ao mudar busca ou categoria
+  useEffect(() => {
+    setExpandedRow(null);
+    setSelectedVod(null);
+  }, [search, category]);
 
   // Carregar lista de VOD e categorias
   useEffect(() => {
@@ -127,12 +133,11 @@ export default function VodGrid() {
     };
   }, [handleObserver]);
 
-  // Clique para expandir
+  // Expandir card
   const handleExpand = (vod: Vod, rowIndex: number) => {
     setSelectedVod(vod);
     setExpandedRow(rowIndex);
     setExpandedPlots((prev) => ({ ...prev, [vod.stream_id]: false }));
-    // marca a linha como já expandida (para não reanimar nas próximas trocas)
     if (!expandedRows[rowIndex]) {
       setExpandedRows((prev) => ({ ...prev, [rowIndex]: true }));
     }
@@ -152,7 +157,6 @@ export default function VodGrid() {
           [selectedVod.stream_id]: needsShowMore,
         }));
       } else {
-        // se ainda não renderizou, garante estado inicial falso
         setShowMoreAvailable((prev) => ({
           ...prev,
           [selectedVod.stream_id]: false,
@@ -332,7 +336,7 @@ export default function VodGrid() {
       <div ref={loaderRef} className="h-10"></div>
 
       {/* Player */}
-      {playingVod && selectedVod && (
+      {playingVod && selectedVod && auth && (
         <VodPlayer
           url={`${auth.host}/movie/${auth.username}/${auth.password}/${playingVod.stream_id}.${playingVod.container_extension || "mp4"}`}
           title={playingVod.name}
